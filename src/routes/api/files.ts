@@ -67,6 +67,26 @@ function toRelative(resolvedPath: string) {
   return relative || ''
 }
 
+export function resolveUploadDestination(resolvedTarget: string, fileName: string) {
+  const normalizedName = fileName.trim()
+  if (
+    !normalizedName ||
+    normalizedName.includes('/') ||
+    normalizedName.includes('\\') ||
+    normalizedName === '.' ||
+    normalizedName === '..' ||
+    normalizedName.includes('\0')
+  ) {
+    throw new Error('Invalid upload filename')
+  }
+
+  const destination = path.join(resolvedTarget, normalizedName)
+  // Re-run the workspace boundary check after joining the untrusted filename.
+  // This prevents multipart filenames like `../secret` from escaping the root
+  // even on runtimes that preserve path separators in File.name.
+  return ensureWorkspacePath(destination)
+}
+
 function sortEntries(entries: Array<FileEntry>) {
   return entries.sort((a, b) => {
     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
@@ -343,7 +363,7 @@ export const Route = createFileRoute('/api/files')({
             const resolvedTarget = ensureWorkspacePath(targetPath)
             const isDir = (await fs.stat(resolvedTarget)).isDirectory()
             const destination = isDir
-              ? path.join(resolvedTarget, file.name)
+              ? resolveUploadDestination(resolvedTarget, file.name)
               : resolvedTarget
             await fs.mkdir(path.dirname(destination), { recursive: true })
             const buffer = Buffer.from(await file.arrayBuffer())

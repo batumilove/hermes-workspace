@@ -214,16 +214,17 @@ export function getRequestIp(request: Request): string {
     if (real) return real
   }
   // Node's Request does not expose the socket; the adapter that constructs it
-  // (TanStack Start / undici) may attach `remoteAddress` under a well-known
-  // symbol. Fall back to loopback when nothing is available so we fail *safe*
-  // (no LAN/Tailscale bypass for unknown peers).
+  // (TanStack Start / undici) may attach `remoteAddress`. If the peer address is
+  // unavailable, fail closed for local-only sensitive routes instead of assuming
+  // loopback — otherwise remote traffic can be misclassified as local.
   const maybeAddress = (request as unknown as { remoteAddress?: string })
     .remoteAddress
-  return (maybeAddress && maybeAddress.trim()) || '127.0.0.1'
+  return (maybeAddress && maybeAddress.trim()) || 'unknown'
 }
 
 function isLocalRequest(request: Request): boolean {
   const ip = getRequestIp(request)
+  if (ip === 'unknown') return false
   const localIPs = ['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1']
   if (localIPs.includes(ip)) return true
   // Allow Tailscale (100.x.x.x) and private LAN ranges

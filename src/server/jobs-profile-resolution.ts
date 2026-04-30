@@ -18,7 +18,7 @@ export function sanitizeProfileName(
 
 export function resolveJobsProfile(
   url: URL,
-  envProfile = process.env.HERMES_PROFILE,
+  envProfile: string | null | undefined = process.env.HERMES_PROFILE,
   activeProfileResolver: () => string = getActiveProfileName,
 ): string | null {
   const fromQuery = sanitizeProfileName(url.searchParams.get('profile'))
