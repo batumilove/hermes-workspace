@@ -87,4 +87,24 @@ describe('ensureWorkspacePath (#121)', () => {
     // `resolved === WORKSPACE_ROOT` short-circuit
     expect(rel).toBe('')
   })
+
+  it('rejects multipart upload filenames that escape the workspace root', async () => {
+    const { resolveUploadDestination } = await import('./files')
+    const uploadDir = path.join(tmpRoot, 'uploads')
+    fs.mkdirSync(uploadDir, { recursive: true })
+
+    expect(() =>
+      resolveUploadDestination(uploadDir, '../outside-workspace.txt'),
+    ).toThrow(/Invalid upload filename|outside workspace/)
+  })
+
+  it('normalizes safe multipart upload filenames inside the target directory', async () => {
+    const { resolveUploadDestination } = await import('./files')
+    const uploadDir = path.join(tmpRoot, 'uploads')
+    fs.mkdirSync(uploadDir, { recursive: true })
+
+    expect(resolveUploadDestination(uploadDir, 'note.txt')).toBe(
+      path.join(uploadDir, 'note.txt'),
+    )
+  })
 })

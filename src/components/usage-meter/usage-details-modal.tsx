@@ -237,7 +237,7 @@ function statusBadge(status: ProviderUsage['status']) {
   }
 }
 
-function buildCsv(usage: UsageSummary): string {
+function buildCsv(usage: UsageSummary, use24HourTime: boolean): string {
   const rows: Array<string> = []
   rows.push('Usage Summary')
   rows.push('Metric,Value')
@@ -281,6 +281,9 @@ export function UsageDetailsModal({
     'providers',
   )
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const use24HourTime = useChatSettingsStore(
+    (state) => state.settings.use24HourTime,
+  )
 
   const handleSetDefault = (provider: string) => {
     onSetPreferredProvider?.(provider)
@@ -304,7 +307,7 @@ export function UsageDetailsModal({
   }
 
   const handleExport = () => {
-    const csv = buildCsv(usage)
+    const csv = buildCsv(usage, use24HourTime)
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')

@@ -31,6 +31,29 @@ const MIME_BY_EXT: Record<string, string> = {
   '.ico': 'image/x-icon',
 }
 
+export function buildPreviewHeaders(absPath: string): Record<string, string> {
+  const mime = MIME_BY_EXT[extname(absPath).toLowerCase()] ?? 'application/octet-stream'
+  return {
+    'Content-Type': mime,
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+    'X-Content-Type-Options': 'nosniff',
+    // Preview files can contain agent- or user-generated HTML/SVG/JS. Keep them
+    // same-response renderable for the iframe preview, but sandbox them without
+    // allow-same-origin so active content cannot use workspace cookies or APIs.
+    'Content-Security-Policy': [
+      'sandbox allow-scripts allow-forms allow-popups',
+      "default-src 'none'",
+      "img-src 'self' data: blob:",
+      "style-src 'unsafe-inline'",
+      "script-src 'unsafe-inline'",
+      "connect-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+    ].join('; '),
+  }
+}
+
 function allowedPrefixes(): string[] {
   const home = os.homedir()
   const hermesHome =
@@ -82,15 +105,9 @@ export const Route = createFileRoute('/api/preview-file')({
             return new Response('File too large for preview', { status: 413 })
           }
           const body = readFileSync(abs)
-          const mime = MIME_BY_EXT[extname(abs).toLowerCase()] ?? 'application/octet-stream'
           return new Response(body, {
             status: 200,
-            headers: {
-              'Content-Type': mime,
-              'Cache-Control': 'no-store',
-              // Restrict referrer so preview content can't phone home with paths
-              'Referrer-Policy': 'no-referrer',
-            },
+            headers: buildPreviewHeaders(abs),
           })
         } catch (error) {
           return new Response(
