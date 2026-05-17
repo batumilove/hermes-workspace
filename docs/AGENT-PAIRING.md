@@ -33,7 +33,8 @@ hermes --version
 
 ```bash
 # Official Nous installer — works on macOS, Linux, WSL
-curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-agent-install.sh
+bash /tmp/hermes-agent-install.sh
 ```
 
 After install, restart your shell or run:
