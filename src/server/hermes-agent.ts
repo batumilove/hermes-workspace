@@ -155,7 +155,7 @@ export async function startHermesAgent(): Promise<StartHermesAgentResult> {
         return {
           ok: false,
           error:
-            "hermes-agent not found. Run the installer: curl -fsSL https://hermes-workspace.com/install.sh | bash",
+            "hermes-agent not found. Download and run the installer: curl -fsSL https://hermes-workspace.com/install.sh -o /tmp/hermes-workspace-install.sh && bash /tmp/hermes-workspace-install.sh",
         }
       }
 
