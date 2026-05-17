@@ -2,7 +2,8 @@
 # Hermes Workspace — one-liner installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/outsourc-e/hermes-workspace/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/outsourc-e/hermes-workspace/main/install.sh -o /tmp/hermes-workspace-install.sh
+bash /tmp/hermes-workspace-install.sh
 #
 # What it does:
 #   1. Verifies Node 22+, git, pnpm
@@ -142,10 +143,10 @@ if command -v hermes &>/dev/null; then
   green "  hermes-agent already installed ✓ ($(command -v hermes))"
 else
   yellow "  Delegating to: $NOUS_INSTALLER_URL"
-  if ! curl -fsSL "$NOUS_INSTALLER_URL" | bash; then
+  if ! curl -fsSL "$NOUS_INSTALLER_URL" -o /tmp/hermes-agent-install.sh && bash /tmp/hermes-agent-install.sh; then
     red "  Nous installer failed. See its output above for details."
     red "  You can retry manually:"
-    red "    curl -fsSL $NOUS_INSTALLER_URL | bash"
+    red "    curl -fsSL $NOUS_INSTALLER_URL -o /tmp/hermes-agent-install.sh && bash /tmp/hermes-agent-install.sh"
     exit 1
   fi
   # Nous typically installs `hermes` to ~/.hermes/bin or ~/.local/bin
@@ -154,7 +155,8 @@ else
   if ! command -v hermes &>/dev/null; then
     red "  hermes-agent installed, but 'hermes' is not on PATH in this shell."
     yellow "  Open a new shell (or: source ~/.bashrc / ~/.zshrc) and re-run:"
-    yellow "    curl -fsSL https://hermes-workspace.com/install.sh | bash"
+    yellow "    curl -fsSL https://hermes-workspace.com/install.sh -o /tmp/hermes-workspace-install.sh
+bash /tmp/hermes-workspace-install.sh"
     exit 1
   fi
   green "  hermes-agent installed ✓ ($(command -v hermes))"

@@ -154,7 +154,7 @@ const config = defineConfig(({ mode, command }) => {
       console.warn(
         '[hermes-agent] Could not find hermes-agent installation.\n' +
           '  Run the installer:\n' +
-          '    curl -fsSL https://hermes-workspace.com/install.sh | bash\n' +
+          '    curl -fsSL https://hermes-workspace.com/install.sh -o /tmp/hermes-workspace-install.sh; bash /tmp/hermes-workspace-install.sh\n' +
           '  Or set CLAUDE_AGENT_PATH in .env to point at your hermes-agent clone.',
       )
       return

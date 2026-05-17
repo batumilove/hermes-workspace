@@ -86,13 +86,14 @@ Three paths — pick the one that matches you:
 | Path | Best for | Time |
 |---|---|---|
 | **🐳 [Docker Compose](#-docker-quickstart)** | Self-hosters, home labs, "give me a compose gig" | ~2 min |
-| **🌐 One-line install** | Local dev on macOS/Linux | ~3 min |
+| **🌐 Downloaded installer** | Local dev on macOS/Linux | ~3 min |
 | **🔌 Attach to existing `hermes-agent`** | You already run Hermes Agent | ~1 min |
 
-### One-line install
+### Downloaded installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/outsourc-e/hermes-workspace/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/outsourc-e/hermes-workspace/main/install.sh -o /tmp/hermes-workspace-install.sh
+bash /tmp/hermes-workspace-install.sh
 ```
 
 This installs `hermes-agent` via Nous's official installer, clones this repo, sets up `.env`, and installs dependencies. Then:
@@ -182,7 +183,8 @@ Example Hermes Agent gateway setup (from scratch):
 
 ```bash
 # Install hermes-agent via Nous's official installer
-curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-agent-install.sh
+bash /tmp/hermes-agent-install.sh
 
 # Configure a provider + start the gateway
 hermes setup
