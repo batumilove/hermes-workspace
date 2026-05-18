@@ -7,7 +7,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { useChatSettingsStore } from '@/hooks/use-chat-settings'
 import { formatModelName } from '@/lib/format-model-name'
 
 type ModelUsage = {
@@ -53,7 +52,7 @@ type ProviderUsage = {
   status: 'ok' | 'missing_credentials' | 'auth_expired' | 'error'
   message?: string
   plan?: string
-  lines: Array<UsageLine>
+  lines: UsageLine[]
   updatedAt: number
 }
 
@@ -82,10 +81,10 @@ function formatTokens(value: number): string {
   return Math.round(value).toString()
 }
 
-function formatTimestamp(value: number | undefined, use24HourTime: boolean): string {
+function formatTimestamp(value?: number): string {
   if (!value) return '—'
   const date = new Date(value < 1_000_000_000_000 ? value * 1000 : value)
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: !use24HourTime })
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatResetTime(iso?: string): string {
@@ -237,7 +236,7 @@ function statusBadge(status: ProviderUsage['status']) {
   }
 }
 
-function buildCsv(usage: UsageSummary, use24HourTime: boolean): string {
+function buildCsv(usage: UsageSummary): string {
   const rows: Array<string> = []
   rows.push('Usage Summary')
   rows.push('Metric,Value')
@@ -260,7 +259,7 @@ function buildCsv(usage: UsageSummary, use24HourTime: boolean): string {
   )
   usage.sessions.forEach((session) => {
     rows.push(
-      `${session.id},${session.model},${session.inputTokens},${session.outputTokens},${session.costUsd.toFixed(4)},${formatTimestamp(session.startedAt, use24HourTime)},${formatTimestamp(session.updatedAt, use24HourTime)}`,
+      `${session.id},${session.model},${session.inputTokens},${session.outputTokens},${session.costUsd.toFixed(4)},${formatTimestamp(session.startedAt)},${formatTimestamp(session.updatedAt)}`,
     )
   })
   return rows.join('\n')
@@ -281,9 +280,6 @@ export function UsageDetailsModal({
     'providers',
   )
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const use24HourTime = useChatSettingsStore(
-    (state) => state.settings.use24HourTime,
-  )
 
   const handleSetDefault = (provider: string) => {
     onSetPreferredProvider?.(provider)
@@ -307,7 +303,7 @@ export function UsageDetailsModal({
   }
 
   const handleExport = () => {
-    const csv = buildCsv(usage, use24HourTime)
+    const csv = buildCsv(usage)
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -325,7 +321,7 @@ export function UsageDetailsModal({
         <div>
           <DialogTitle>Usage Overview</DialogTitle>
           <DialogDescription>
-            Live usage from your Hermes session and connected providers.
+            Live usage from your gateway session and connected providers.
           </DialogDescription>
         </div>
         <DialogClose className="text-primary-700">Close</DialogClose>
@@ -339,7 +335,7 @@ export function UsageDetailsModal({
             onClick={() => setActiveTab(tab)}
             className={`rounded-full px-3 py-1 font-medium transition ${
               activeTab === tab
-                ? 'bg-white text-primary-900 shadow-sm'
+                ? 'bg-primary-100 text-primary-800 shadow-sm'
                 : 'text-primary-600 hover:text-primary-800'
             }`}
           >
@@ -358,7 +354,7 @@ export function UsageDetailsModal({
             ) : null}
 
             <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-primary-200 bg-white/60 p-3">
+              <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-3">
                 <div className="text-xs uppercase tracking-wide text-primary-500">
                   Input Tokens
                 </div>
@@ -366,7 +362,7 @@ export function UsageDetailsModal({
                   {formatTokens(usage.inputTokens)}
                 </div>
               </div>
-              <div className="rounded-2xl border border-primary-200 bg-white/60 p-3">
+              <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-3">
                 <div className="text-xs uppercase tracking-wide text-primary-500">
                   Output Tokens
                 </div>
@@ -374,7 +370,7 @@ export function UsageDetailsModal({
                   {formatTokens(usage.outputTokens)}
                 </div>
               </div>
-              <div className="rounded-2xl border border-primary-200 bg-white/60 p-3">
+              <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-3">
                 <div className="text-xs uppercase tracking-wide text-primary-500">
                   Daily Cost
                 </div>
@@ -384,21 +380,20 @@ export function UsageDetailsModal({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-primary-200 bg-white/70 p-4">
+            <div className="rounded-2xl border border-primary-200 bg-primary-50/70 p-4">
               <div className="mb-3 text-sm font-semibold text-primary-900">
                 Cost per model
               </div>
               <div className="grid gap-2">
                 {usage.models.length === 0 ? (
                   <div className="text-sm text-primary-500">
-                    No model usage reported yet. Send a message to start
-                    tracking usage here.
+                    No model usage reported yet. Send a message to start tracking usage here.
                   </div>
                 ) : (
                   usage.models.map((model) => (
                     <div
                       key={model.model}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary-100 bg-white px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary-100 bg-primary-50 px-3 py-2 text-sm"
                     >
                       <div className="font-medium text-primary-800">
                         {formatModelName(model.model)}
@@ -416,21 +411,20 @@ export function UsageDetailsModal({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-primary-200 bg-white/70 p-4">
+            <div className="rounded-2xl border border-primary-200 bg-primary-50/70 p-4">
               <div className="mb-3 text-sm font-semibold text-primary-900">
                 Session history
               </div>
               <div className="grid gap-2">
                 {usage.sessions.length === 0 ? (
                   <div className="text-sm text-primary-500">
-                    No sessions reported yet. Start a chat to see session
-                    history here.
+                    No sessions reported yet. Start a chat to see session history here.
                   </div>
                 ) : (
                   usage.sessions.map((session) => (
                     <div
                       key={session.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary-100 bg-white px-3 py-2 text-sm"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary-100 bg-primary-50 px-3 py-2 text-sm"
                     >
                       <div>
                         <div className="font-medium text-primary-800">
@@ -445,8 +439,8 @@ export function UsageDetailsModal({
                         {formatTokens(session.outputTokens)} out
                       </div>
                       <div className="text-xs text-primary-500">
-                        {formatTimestamp(session.startedAt, use24HourTime)} →{' '}
-                        {formatTimestamp(session.updatedAt, use24HourTime)}
+                        {formatTimestamp(session.startedAt)} →{' '}
+                        {formatTimestamp(session.updatedAt)}
                       </div>
                       <div className="font-semibold text-primary-900">
                         {formatCurrency(session.costUsd)}
@@ -477,7 +471,7 @@ export function UsageDetailsModal({
             <div className="flex items-center justify-between gap-3">
               <div className="text-xs text-primary-500">
                 Auto-polls every 30s · Last updated{' '}
-                {formatTimestamp(providerUpdatedAt ?? undefined, use24HourTime)}
+                {formatTimestamp(providerUpdatedAt ?? undefined)}
               </div>
               <Button
                 size="sm"
@@ -491,14 +485,12 @@ export function UsageDetailsModal({
 
             <div className="grid gap-3">
               {providerUsage.length === 0 ? (
-                <div className="rounded-2xl border border-primary-200 bg-white/70 p-6 text-center">
+                <div className="rounded-2xl border border-primary-200 bg-primary-50/70 p-6 text-center">
                   <div className="text-sm font-medium text-primary-700">
-                    No providers connected. Add a provider in Settings to start
-                    chatting.
+                    No providers connected. Add a provider in Settings to start chatting.
                   </div>
                   <div className="mt-1 text-xs text-primary-500">
-                    Open Settings -{'>'} Providers to connect Claude CLI or add
-                    an API key.
+                    Open Settings -{'>'} Providers to connect Claude CLI or add an API key.
                   </div>
                 </div>
               ) : (
@@ -511,7 +503,7 @@ export function UsageDetailsModal({
                       className={`rounded-2xl border p-4 ${
                         isDefault
                           ? 'border-primary-300 bg-primary-50/50'
-                          : 'border-primary-200 bg-white/70'
+                          : 'border-primary-200 bg-primary-50/70'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -533,7 +525,7 @@ export function UsageDetailsModal({
                         <div className="flex items-center gap-2">
                           {statusBadge(provider.status)}
                           <span className="text-[10px] text-primary-400">
-                            {formatTimestamp(provider.updatedAt, use24HourTime)}
+                            {formatTimestamp(provider.updatedAt)}
                           </span>
                         </div>
                       </div>
@@ -569,7 +561,7 @@ export function UsageDetailsModal({
                                 onClick={() =>
                                   handleSetDefault(provider.provider)
                                 }
-                                className="rounded-lg border border-primary-200 bg-white px-3 py-1.5 text-xs font-medium text-primary-700 transition hover:bg-primary-50"
+                                className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700 transition hover:bg-primary-100"
                               >
                                 Set as Default
                               </button>

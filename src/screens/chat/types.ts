@@ -7,7 +7,7 @@ export type ToolCallContent = {
 }
 
 export type ToolResultContent = {
-  type: 'toolResult' | 'tool_result'
+  type: 'toolResult'
   toolCallId?: string
   toolName?: string
   content?: Array<{ type?: string; text?: string }>
@@ -27,11 +27,7 @@ export type ThinkingContent = {
   thinkingSignature?: string
 }
 
-export type MessageContent =
-  | TextContent
-  | ToolCallContent
-  | ToolResultContent
-  | ThinkingContent
+export type MessageContent = TextContent | ToolCallContent | ThinkingContent
 
 export type ChatAttachment = {
   id?: string

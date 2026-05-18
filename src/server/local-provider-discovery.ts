@@ -244,7 +244,7 @@ void ensureDiscovery()
 // -------------------------------------------------------------------
 
 const CONFIG_PATH = path.join(
-  process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes'),
+  process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes'),
   'config.yaml',
 )
 

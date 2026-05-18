@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Project Workspace — one-liner installer
+# Hermes Workspace — one-liner installer
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/outsourc-e/hermes-workspace/main/install.sh -o /tmp/hermes-workspace-install.sh
-#   bash /tmp/hermes-workspace-install.sh
+bash /tmp/hermes-workspace-install.sh
 #
 # What it does:
 #   1. Verifies Node 22+, git, pnpm
 #   2. Installs hermes-agent via Nous's official upstream installer
 #   3. Clones hermes-workspace
-#   4. Sets up .env, enables the Hermes HTTP API, installs deps,
+#   4. Sets up .env, enables the Hermes API server, installs deps,
 #      and links bundled skills
 #
 # Re-runnable. Will skip anything already installed.
@@ -35,7 +35,7 @@ banner() {
   cat <<'EOF'
 
    ╭────────────────────────────────────────────╮
-   │  PROJECT WORKSPACE — zero-fork installer   │
+   │  HERMES WORKSPACE — zero-fork installer   │
    │  outsourc-e/hermes-workspace               │
    ╰────────────────────────────────────────────╯
 
@@ -50,6 +50,20 @@ ensure_path() {
     *":$candidate:"*) ;;
     *) export PATH="$candidate:$PATH" ;;
   esac
+}
+
+pnpm_cmd() {
+  if command -v pnpm &>/dev/null; then
+    pnpm "$@"
+    return
+  fi
+  if command -v corepack &>/dev/null && corepack pnpm --version &>/dev/null; then
+    corepack pnpm "$@"
+    return
+  fi
+  red "pnpm is not available in this shell."
+  red "Try opening a new shell, or install pnpm manually: https://pnpm.io/installation"
+  exit 1
 }
 
 ensure_env_key() {
@@ -105,9 +119,15 @@ green "  curl ✓"
 
 if ! command -v pnpm &>/dev/null; then
   yellow "  pnpm not found — installing via corepack…"
-  corepack enable 2>/dev/null || npm install -g pnpm
+  if command -v corepack &>/dev/null; then
+    corepack enable 2>/dev/null || true
+    corepack prepare pnpm@latest --activate 2>/dev/null || true
+  fi
+  if ! command -v pnpm &>/dev/null && ! (command -v corepack &>/dev/null && corepack pnpm --version &>/dev/null); then
+    npm install -g pnpm
+  fi
 fi
-green "  pnpm $(pnpm --version) ✓"
+green "  pnpm $(pnpm_cmd --version) ✓"
 
 # ─── install hermes-agent (delegate to Nous upstream installer) ──────────
 # hermes-agent is NOT on PyPI. It installs from source via Nous's own
@@ -123,18 +143,10 @@ if command -v hermes &>/dev/null; then
   green "  hermes-agent already installed ✓ ($(command -v hermes))"
 else
   yellow "  Delegating to: $NOUS_INSTALLER_URL"
-  nous_installer_tmp="$(mktemp)"
-  trap 'rm -f "$nous_installer_tmp"' EXIT
-  if ! curl -fsSL "$NOUS_INSTALLER_URL" -o "$nous_installer_tmp"; then
-    red "  Failed to download Nous installer."
-    red "  URL: $NOUS_INSTALLER_URL"
-    exit 1
-  fi
-  if ! bash "$nous_installer_tmp"; then
+  if ! curl -fsSL "$NOUS_INSTALLER_URL" -o /tmp/hermes-agent-install.sh && bash /tmp/hermes-agent-install.sh; then
     red "  Nous installer failed. See its output above for details."
     red "  You can retry manually:"
-    red "    curl -fsSL $NOUS_INSTALLER_URL -o /tmp/hermes-agent-install.sh"
-    red "    bash /tmp/hermes-agent-install.sh"
+    red "    curl -fsSL $NOUS_INSTALLER_URL -o /tmp/hermes-agent-install.sh && bash /tmp/hermes-agent-install.sh"
     exit 1
   fi
   # Nous typically installs `hermes` to ~/.hermes/bin or ~/.local/bin
@@ -143,8 +155,8 @@ else
   if ! command -v hermes &>/dev/null; then
     red "  hermes-agent installed, but 'hermes' is not on PATH in this shell."
     yellow "  Open a new shell (or: source ~/.bashrc / ~/.zshrc) and re-run:"
-    yellow "    curl -fsSL https://hermes-workspace.com/install.sh -o /tmp/hermes-workspace-install.sh"
-    yellow "    bash /tmp/hermes-workspace-install.sh"
+    yellow "    curl -fsSL https://hermes-workspace.com/install.sh -o /tmp/hermes-workspace-install.sh
+bash /tmp/hermes-workspace-install.sh"
     exit 1
   fi
   green "  hermes-agent installed ✓ ($(command -v hermes))"
@@ -175,7 +187,7 @@ fi
 ensure_env_key "$INSTALL_DIR/.env" "HERMES_API_URL" "http://127.0.0.1:${GATEWAY_PORT}"
 green "  .env ready ✓"
 
-cyan "→ Enabling Hermes HTTP API…"
+cyan "→ Enabling Hermes API server…"
 HERMES_ENV_PATH="$(hermes config env-path 2>/dev/null || true)"
 if [[ -z "$HERMES_ENV_PATH" ]]; then
   HERMES_ENV_PATH="$HOME/.hermes/.env"
@@ -203,7 +215,7 @@ if [[ -f "$HERMES_ENV_PATH" ]]; then
 fi
 
 cyan "→ Installing npm deps (pnpm install)…"
-pnpm install --silent
+pnpm_cmd install --silent
 green "  deps installed ✓"
 
 # ─── seed Hermes skills (Conductor needs workspace-dispatch) ─────────────
@@ -223,6 +235,47 @@ if [[ -d "$INSTALL_DIR/skills" ]]; then
   done
 fi
 
+# ─── macOS LaunchAgent (plist) ───────────────────────────────────────────
+# Best-effort convenience for local macOS installs. This keeps the source of
+# truth in-repo and makes sure launchd runs server-entry.js (the thin HTTP
+# wrapper), not dist/server/server.js directly.
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  cyan "→ Installing macOS LaunchAgent (com.hermes.workspace)…"
+
+  PLIST_TEMPLATE="$INSTALL_DIR/macos/com.hermes.workspace.plist.template"
+  PLIST_DEST="$HOME/Library/LaunchAgents/com.hermes.workspace.plist"
+  mkdir -p "$HOME/Library/LaunchAgents"
+
+  NODE_BIN="$(command -v node)"
+  HERMES_PORT="${PORT:-3000}"
+  HERMES_API_GATEWAY="http://127.0.0.1:${GATEWAY_PORT}"
+  TOKEN=""
+
+  if [[ -f "$HOME/.hermes/.env" ]]; then
+    TOKEN="$(grep -E '^(HERMES_API_TOKEN|CLAUDE_API_TOKEN)=' "$HOME/.hermes/.env" | head -1 | cut -d= -f2- | tr -d '"' || true)"
+  fi
+  if [[ -z "$TOKEN" && -f "$INSTALL_DIR/.env" ]]; then
+    TOKEN="$(grep -E '^(HERMES_API_TOKEN|CLAUDE_API_TOKEN)=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- | tr -d '"' || true)"
+  fi
+
+  sed \
+    -e "s|{{NODE_BIN}}|${NODE_BIN}|g" \
+    -e "s|{{INSTALL_DIR}}|${INSTALL_DIR}|g" \
+    -e "s|{{PORT}}|${HERMES_PORT}|g" \
+    -e "s|{{HERMES_API_URL}}|${HERMES_API_GATEWAY}|g" \
+    -e "s|{{HERMES_API_TOKEN}}|${TOKEN}|g" \
+    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+
+  launchctl unload "$PLIST_DEST" 2>/dev/null || true
+  if launchctl load -w "$PLIST_DEST" 2>/dev/null; then
+    green "  LaunchAgent loaded ✓ (com.hermes.workspace)"
+  else
+    yellow "  Could not load LaunchAgent now — it will still be available for next login."
+  fi
+  green "  Plist installed: $PLIST_DEST ✓"
+fi
+
 # ─── done ─────────────────────────────────────────────────────────────────
 
 bold ""
@@ -233,7 +286,7 @@ cat <<EOF
 
 Next steps (two terminals):
 
-  1) Start the Hermes gateway:
+  1) Start the Hermes Agent gateway:
        hermes gateway run
      (first run may prompt for hermes setup)
 

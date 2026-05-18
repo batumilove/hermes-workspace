@@ -1,4 +1,3 @@
-import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { execFile } from 'node:child_process'
@@ -16,15 +15,9 @@ import {
   requireJsonContentType,
   safeErrorMessage,
 } from '../../server/rate-limit'
+import { loadWorkspaceCatalog } from './workspace'
 
 const execFileAsync = promisify(execFile)
-
-const WORKSPACE_ROOT = (
-  process.env.HERMES_WORKSPACE_DIR ||
-  process.env.HERMES_WORKSPACE_DIR ||
-  process.env.HERMES_HOME ||
-  path.join(os.homedir(), '.hermes')
-).trim()
 
 type FileEntry = {
   name: string
@@ -39,18 +32,26 @@ type FileEntry = {
  * Resolve an input path and verify it stays within WORKSPACE_ROOT.
  *
  * Uses path.relative() rather than a string-prefix check (which is unsafe
- * for sibling paths like `/root/.hermes` vs `/root/.hermes2`). The relative
+ * for sibling paths like `/root/.claude` vs `/root/.claude2`). The relative
  * form rejects any candidate that escapes the root via `..` segments or
  * that resolves to an absolute path outside the root. See #121.
  */
-function ensureWorkspacePath(input: string) {
+async function getWorkspaceRoot(): Promise<string> {
+  const catalog = await loadWorkspaceCatalog()
+  if (!catalog.isValid || !catalog.path) {
+    throw new Error('No valid workspace selected')
+  }
+  return catalog.path
+}
+
+function ensureWorkspacePath(input: string, workspaceRoot: string) {
   const raw = input.trim()
-  if (!raw) return WORKSPACE_ROOT
+  if (!raw) return workspaceRoot
   const resolved = path.isAbsolute(raw)
     ? path.resolve(raw)
-    : path.resolve(WORKSPACE_ROOT, raw)
-  if (resolved === WORKSPACE_ROOT) return resolved
-  const relative = path.relative(WORKSPACE_ROOT, resolved)
+    : path.resolve(workspaceRoot, raw)
+  if (resolved === workspaceRoot) return resolved
+  const relative = path.relative(workspaceRoot, resolved)
   if (
     !relative ||
     relative.startsWith('..') ||
@@ -62,29 +63,9 @@ function ensureWorkspacePath(input: string) {
   return resolved
 }
 
-function toRelative(resolvedPath: string) {
-  const relative = path.relative(WORKSPACE_ROOT, resolvedPath)
+function toRelative(resolvedPath: string, workspaceRoot: string) {
+  const relative = path.relative(workspaceRoot, resolvedPath)
   return relative || ''
-}
-
-export function resolveUploadDestination(resolvedTarget: string, fileName: string) {
-  const normalizedName = fileName.trim()
-  if (
-    !normalizedName ||
-    normalizedName.includes('/') ||
-    normalizedName.includes('\\') ||
-    normalizedName === '.' ||
-    normalizedName === '..' ||
-    normalizedName.includes('\0')
-  ) {
-    throw new Error('Invalid upload filename')
-  }
-
-  const destination = path.join(resolvedTarget, normalizedName)
-  // Re-run the workspace boundary check after joining the untrusted filename.
-  // This prevents multipart filenames like `../secret` from escaping the root
-  // even on runtimes that preserve path separators in File.name.
-  return ensureWorkspacePath(destination)
 }
 
 function sortEntries(entries: Array<FileEntry>) {
@@ -141,6 +122,7 @@ type ReadDirectoryOptions = {
   maxDepth: number
   maxEntries: number | null
   countedEntries: { value: number }
+  workspaceRoot: string
 }
 
 function parseMaxDepth(input: string | null): number | null {
@@ -183,7 +165,7 @@ async function readDirectory(
 
     if (IGNORED_DIRS.has(entry.name)) continue
     const fullPath = path.join(dirPath, entry.name)
-    const relativePath = toRelative(fullPath)
+    const relativePath = toRelative(fullPath, options.workspaceRoot)
     try {
       const stats = await fs.stat(fullPath)
       if (entry.isDirectory()) {
@@ -215,9 +197,9 @@ async function readDirectory(
   return sortEntries(mapped)
 }
 
-async function readGlobDirectory(globPath: string) {
+async function readGlobDirectory(globPath: string, workspaceRoot: string) {
   const { directoryPath, regex } = parseGlobPattern(globPath)
-  const resolvedDirectory = ensureWorkspacePath(directoryPath)
+  const resolvedDirectory = ensureWorkspacePath(directoryPath, workspaceRoot)
   const entries = await fs.readdir(resolvedDirectory, { withFileTypes: true })
   const mapped: Array<FileEntry> = []
 
@@ -227,7 +209,7 @@ async function readGlobDirectory(globPath: string) {
     const stats = await fs.stat(fullPath)
     mapped.push({
       name: entry.name,
-      path: toRelative(fullPath),
+      path: toRelative(fullPath, workspaceRoot),
       type: entry.isDirectory() ? 'folder' : 'file',
       size: stats.size,
       modifiedAt: stats.mtime.toISOString(),
@@ -235,7 +217,7 @@ async function readGlobDirectory(globPath: string) {
   }
 
   return {
-    root: toRelative(resolvedDirectory),
+    root: toRelative(resolvedDirectory, workspaceRoot),
     entries: sortEntries(mapped),
   }
 }
@@ -280,16 +262,21 @@ export const Route = createFileRoute('/api/files')({
             url.searchParams.get('maxEntries'),
           )
 
+          const workspaceRoot = await getWorkspaceRoot()
+
           if (action === 'list' && hasGlob(inputPath)) {
-            const globListing = await readGlobDirectory(inputPath)
+            const globListing = await readGlobDirectory(
+              inputPath,
+              workspaceRoot,
+            )
             return json({
               root: globListing.root,
-              base: WORKSPACE_ROOT,
+              base: workspaceRoot,
               entries: globListing.entries,
             })
           }
 
-          const resolvedPath = ensureWorkspacePath(inputPath)
+          const resolvedPath = ensureWorkspacePath(inputPath, workspaceRoot)
 
           if (action === 'read') {
             const buffer = await fs.readFile(resolvedPath)
@@ -297,13 +284,13 @@ export const Route = createFileRoute('/api/files')({
               const mime = getMimeType(resolvedPath)
               return json({
                 type: 'image',
-                path: toRelative(resolvedPath),
+                path: toRelative(resolvedPath, workspaceRoot),
                 content: `data:${mime};base64,${buffer.toString('base64')}`,
               })
             }
             return json({
               type: 'text',
-              path: toRelative(resolvedPath),
+              path: toRelative(resolvedPath, workspaceRoot),
               content: buffer.toString('utf8'),
             })
           }
@@ -324,10 +311,11 @@ export const Route = createFileRoute('/api/files')({
             maxDepth: maxDepthParam ?? MAX_DIRECTORY_DEPTH,
             maxEntries: maxEntriesParam,
             countedEntries: { value: 0 },
+            workspaceRoot,
           })
           return json({
-            root: toRelative(resolvedPath),
-            base: WORKSPACE_ROOT,
+            root: toRelative(resolvedPath, workspaceRoot),
+            base: workspaceRoot,
             entries: tree,
           })
         } catch (err) {
@@ -344,6 +332,7 @@ export const Route = createFileRoute('/api/files')({
         }
 
         try {
+          const workspaceRoot = await getWorkspaceRoot()
           const contentType = request.headers.get('content-type') || ''
           if (!contentType.includes('multipart/form-data')) {
             const csrfCheck = requireJsonContentType(request)
@@ -360,15 +349,21 @@ export const Route = createFileRoute('/api/files')({
             if (!(file instanceof File)) {
               return json({ error: 'Missing file' }, { status: 400 })
             }
-            const resolvedTarget = ensureWorkspacePath(targetPath)
+            const resolvedTarget = ensureWorkspacePath(
+              targetPath,
+              workspaceRoot,
+            )
             const isDir = (await fs.stat(resolvedTarget)).isDirectory()
             const destination = isDir
-              ? resolveUploadDestination(resolvedTarget, file.name)
+              ? path.join(resolvedTarget, file.name)
               : resolvedTarget
             await fs.mkdir(path.dirname(destination), { recursive: true })
             const buffer = Buffer.from(await file.arrayBuffer())
             await fs.writeFile(destination, buffer)
-            return json({ ok: true, path: toRelative(destination) })
+            return json({
+              ok: true,
+              path: toRelative(destination, workspaceRoot),
+            })
           }
 
           const body = (await request.json().catch(() => ({}))) as Record<
@@ -378,24 +373,36 @@ export const Route = createFileRoute('/api/files')({
           const action = typeof body.action === 'string' ? body.action : 'write'
 
           if (action === 'mkdir') {
-            const dirPath = ensureWorkspacePath(String(body.path || ''))
+            const dirPath = ensureWorkspacePath(
+              String(body.path || ''),
+              workspaceRoot,
+            )
             await fs.mkdir(dirPath, { recursive: true })
-            return json({ ok: true, path: toRelative(dirPath) })
+            return json({ ok: true, path: toRelative(dirPath, workspaceRoot) })
           }
 
           if (action === 'rename') {
-            const fromPath = ensureWorkspacePath(String(body.from || ''))
-            const toPath = ensureWorkspacePath(String(body.to || ''))
+            const fromPath = ensureWorkspacePath(
+              String(body.from || ''),
+              workspaceRoot,
+            )
+            const toPath = ensureWorkspacePath(
+              String(body.to || ''),
+              workspaceRoot,
+            )
             await fs.mkdir(path.dirname(toPath), { recursive: true })
             await fs.rename(fromPath, toPath)
-            return json({ ok: true, path: toRelative(toPath) })
+            return json({ ok: true, path: toRelative(toPath, workspaceRoot) })
           }
 
           if (action === 'delete') {
             if (!requireLocalOrAuth(request)) {
               return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
             }
-            const targetPath = ensureWorkspacePath(String(body.path || ''))
+            const targetPath = ensureWorkspacePath(
+              String(body.path || ''),
+              workspaceRoot,
+            )
             try {
               // Try macOS trash command first
               await execFileAsync('trash', [targetPath])
@@ -406,11 +413,14 @@ export const Route = createFileRoute('/api/files')({
             return json({ ok: true })
           }
 
-          const filePath = ensureWorkspacePath(String(body.path || ''))
+          const filePath = ensureWorkspacePath(
+            String(body.path || ''),
+            workspaceRoot,
+          )
           const content = typeof body.content === 'string' ? body.content : ''
           await fs.mkdir(path.dirname(filePath), { recursive: true })
           await fs.writeFile(filePath, content, 'utf8')
-          return json({ ok: true, path: toRelative(filePath) })
+          return json({ ok: true, path: toRelative(filePath, workspaceRoot) })
         } catch (err) {
           return json({ error: safeErrorMessage(err) }, { status: 500 })
         }

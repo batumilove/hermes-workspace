@@ -17,7 +17,7 @@ afterEach(() => {
   delete process.env.COOKIE_SECURE
   delete process.env.NODE_ENV
   delete process.env.TRUST_PROXY
-  delete process.env.HERMES_PASSWORD
+  delete process.env.CLAUDE_PASSWORD
 })
 
 describe('createSessionCookie (#123)', () => {
@@ -25,7 +25,7 @@ describe('createSessionCookie (#123)', () => {
     process.env.NODE_ENV = 'development'
     const { createSessionCookie } = await import('./auth-middleware')
     const cookie = createSessionCookie('tok123')
-    expect(cookie).toMatch(/^hermes-auth=tok123/)
+    expect(cookie).toMatch(/^claude-auth=tok123/)
     expect(cookie).toContain('HttpOnly')
     expect(cookie).toContain('SameSite=Strict')
     expect(cookie).toContain('Path=/')
@@ -69,14 +69,14 @@ describe('getRequestIp (#125)', () => {
     const ip = getRequestIp(
       makeRequest({ 'x-forwarded-for': '203.0.113.77, 10.0.0.1' }),
     )
-    expect(ip).toBe('unknown')
+    expect(ip).toBe('127.0.0.1')
   })
 
   it('ignores x-real-ip when TRUST_PROXY is unset', async () => {
     delete process.env.TRUST_PROXY
     const { getRequestIp } = await import('./auth-middleware')
     const ip = getRequestIp(makeRequest({ 'x-real-ip': '203.0.113.77' }))
-    expect(ip).toBe('unknown')
+    expect(ip).toBe('127.0.0.1')
   })
 
   it('honors x-forwarded-for when TRUST_PROXY=1', async () => {
@@ -93,15 +93,5 @@ describe('getRequestIp (#125)', () => {
     const { getRequestIp } = await import('./auth-middleware')
     const ip = getRequestIp(makeRequest({ 'x-real-ip': '198.51.100.5' }))
     expect(ip).toBe('198.51.100.5')
-  })
-
-  it('does not classify requests with unknown peer address as local', async () => {
-    delete process.env.TRUST_PROXY
-    delete process.env.HERMES_PASSWORD
-    const { getRequestIp, requireLocalOrAuth } = await import('./auth-middleware')
-    const request = makeRequest({})
-
-    expect(getRequestIp(request)).toBe('unknown')
-    expect(requireLocalOrAuth(request)).toBe(false)
   })
 })

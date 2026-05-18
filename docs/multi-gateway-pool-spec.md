@@ -9,7 +9,7 @@
 
 Hermes Workspace currently operates as a **single-gateway, single-profile UI**. The gateway loads one `HERMES_HOME` at startup and all chat sessions, operations, and memory access flow through that one process.
 
-For multi-profile users (the primary Hermes use case), this means:
+For multi-profile users (the primary Claude use case), this means:
 - **No parallel agent execution**: Cannot brainstorm with Nous while Jules orchestrates Architect and Sentinel in Operations
 - **No profile identity in chat**: The "agent" is always whoever the single gateway was launched as
 - **Terminal fragmentation**: Users must open separate terminal windows per profile to achieve true multi-agent workflows
@@ -27,7 +27,7 @@ For multi-profile users (the primary Hermes use case), this means:
 
 **Implication**: The workspace must be an **agent orchestrator**, not just a UI skin over one gateway.
 
-**Constraint**: Hermes gateway is designed as a single-tenant process. It cannot dynamically reload profiles. Each profile needs its own gateway instance.
+**Constraint**: Hermes Agent gateway is designed as a single-tenant process. It cannot dynamically reload profiles. Each profile needs its own gateway instance.
 
 **Solution**: The workspace maintains a **gateway pool** — one gateway process per active profile, each on its own port, all health-monitored, all routable from the UI.
 
@@ -107,14 +107,14 @@ type GatewayState =
 
 ```typescript
 function spawnGateway(profileName: string, port: number): ChildProcess {
-  const profilePath = path.join(getHermesRoot(), 'profiles', profileName)
+  const profilePath = path.join(getClaudeRoot(), 'profiles', profileName)
   const env = {
     ...process.env,
     HERMES_HOME: profilePath,
-    HERMES_GATEWAY_PORT: String(port),
-    HERMES_PROFILE_NAME: profileName,
+    CLAUDE_GATEWAY_PORT: String(port),
+    CLAUDE_PROFILE_NAME: profileName,
   }
-  return spawn('hermes', ['gateway', '--port', String(port)], { env })
+  return spawn('claude', ['gateway', '--port', String(port)], { env })
 }
 ```
 
@@ -146,7 +146,7 @@ All workspace API routes gain **profile context**:
 ```typescript
 // Current: /api/chat/completions
 // New:    /api/chat/completions?profile=nous
-//         or header: X-Hermes-Profile: nous
+//         or header: X-Claude-Profile: nous
 
 // Gateway proxy routes:
 // /api/gateway/{profile}/chat/completions
@@ -300,10 +300,10 @@ src/server/local-provider-discovery.ts  # Multi-gateway provider discovery
 
 ### Environment Variables
 ```bash
-HERMES_GATEWAY_POOL_ENABLED=true   # Enable multi-gateway mode
-HERMES_GATEWAY_BASE_PORT=8642      # Starting port
-HERMES_GATEWAY_POOL_MAX=10         # Max concurrent gateways
-HERMES_GATEWAY_HEALTH_INTERVAL=30  # Health check seconds
+CLAUDE_GATEWAY_POOL_ENABLED=true   # Enable multi-gateway mode
+CLAUDE_GATEWAY_BASE_PORT=8642      # Starting port
+CLAUDE_GATEWAY_POOL_MAX=10         # Max concurrent gateways
+CLAUDE_GATEWAY_HEALTH_INTERVAL=30  # Health check seconds
 ```
 
 ### workspace-overrides.json

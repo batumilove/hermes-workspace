@@ -1,6 +1,6 @@
 name: Build & publish Docker image
 
-# Publishes Project Workspace to GitHub Container Registry (GHCR) so users
+# Publishes Hermes Workspace to GitHub Container Registry (GHCR) so users
 # can deploy via Coolify / Easypanel / Dokploy / any Docker host with:
 #
 #   image: ghcr.io/outsourc-e/hermes-workspace:latest
@@ -26,7 +26,6 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -73,6 +72,7 @@ jobs:
           cid=$(docker run -d \
             -p 127.0.0.1:3000:3000 \
             -e HERMES_API_URL=http://127.0.0.1:8642 \
+            -e CLAUDE_PASSWORD=ci-smoke-test-password \
             hermes-workspace:smoke)
           trap 'docker logs "$cid" || true; docker rm -f "$cid" || true' EXIT
 

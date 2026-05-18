@@ -21,20 +21,23 @@ import path from 'node:path'
 import os from 'node:os'
 
 type WorkspaceOverrides = {
-  hermesApiUrl?: string
-  hermesDashboardUrl?: string
+  claudeApiUrl?: string
+  claudeDashboardUrl?: string
+}
+
+function hermesHome(): string {
+  return process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? path.join(os.homedir(), '.hermes')
 }
 
 function overridesPath(): string {
-  const home = process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes')
-  return path.join(home, 'workspace-overrides.json')
+  return path.join(hermesHome(), 'workspace-overrides.json')
 }
 
 function readOverrides(): WorkspaceOverrides {
   try {
     const raw = fs.readFileSync(overridesPath(), 'utf-8')
-    const parsed = JSON.parse(raw) as WorkspaceOverrides
-    return parsed && typeof parsed === 'object' ? parsed : {}
+    const parsed = JSON.parse(raw) as unknown
+    return parsed !== null && typeof parsed === 'object' ? (parsed as WorkspaceOverrides) : {}
   } catch {
     return {}
   }
@@ -59,14 +62,16 @@ function normalizeUrl(u: string): string {
 
 const _initialOverrides = readOverrides()
 
-export let HERMES_API = normalizeUrl(
-  _initialOverrides.hermesApiUrl ||
+export let CLAUDE_API = normalizeUrl(
+  _initialOverrides.claudeApiUrl ||
     process.env.HERMES_API_URL ||
+    process.env.CLAUDE_API_URL ||
     'http://127.0.0.1:8642',
 )
-export let HERMES_DASHBOARD_URL = normalizeUrl(
-  _initialOverrides.hermesDashboardUrl ||
+export let CLAUDE_DASHBOARD_URL = normalizeUrl(
+  _initialOverrides.claudeDashboardUrl ||
     process.env.HERMES_DASHBOARD_URL ||
+    process.env.CLAUDE_DASHBOARD_URL ||
     'http://127.0.0.1:9119',
 )
 
@@ -80,19 +85,19 @@ export function setGatewayUrl(input: string | null | undefined): string {
   const normalized = input ? normalizeUrl(input) : ''
   const overrides = readOverrides()
   if (normalized) {
-    overrides.hermesApiUrl = normalized
-    HERMES_API = normalized
+    overrides.claudeApiUrl = normalized
+    CLAUDE_API = normalized
   } else {
-    delete overrides.hermesApiUrl
-    HERMES_API = normalizeUrl(
-      process.env.HERMES_API_URL || 'http://127.0.0.1:8642',
+    delete overrides.claudeApiUrl
+    CLAUDE_API = normalizeUrl(
+      process.env.HERMES_API_URL || process.env.CLAUDE_API_URL || 'http://127.0.0.1:8642',
     )
   }
   writeOverrides(overrides)
   // Force reprobe on the next capability check.
   probePromise = null
   lastProbeAt = 0
-  return HERMES_API
+  return CLAUDE_API
 }
 
 /**
@@ -102,18 +107,18 @@ export function setDashboardUrl(input: string | null | undefined): string {
   const normalized = input ? normalizeUrl(input) : ''
   const overrides = readOverrides()
   if (normalized) {
-    overrides.hermesDashboardUrl = normalized
-    HERMES_DASHBOARD_URL = normalized
+    overrides.claudeDashboardUrl = normalized
+    CLAUDE_DASHBOARD_URL = normalized
   } else {
-    delete overrides.hermesDashboardUrl
-    HERMES_DASHBOARD_URL = normalizeUrl(
-      process.env.HERMES_DASHBOARD_URL || 'http://127.0.0.1:9119',
+    delete overrides.claudeDashboardUrl
+    CLAUDE_DASHBOARD_URL = normalizeUrl(
+      process.env.HERMES_DASHBOARD_URL || process.env.CLAUDE_DASHBOARD_URL || 'http://127.0.0.1:9119',
     )
   }
   writeOverrides(overrides)
   probePromise = null
   lastProbeAt = 0
-  return HERMES_DASHBOARD_URL
+  return CLAUDE_DASHBOARD_URL
 }
 
 /** Current resolved URLs (after any runtime override). */
@@ -123,23 +128,37 @@ export function getResolvedUrls(): {
   source: 'override' | 'env' | 'default'
 } {
   const overrides = readOverrides()
-  const source = overrides.hermesApiUrl
+  const source = overrides.claudeApiUrl
     ? 'override'
-    : process.env.HERMES_API_URL
+    : (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL)
       ? 'env'
       : 'default'
-  return { gateway: HERMES_API, dashboard: HERMES_DASHBOARD_URL, source }
+  return { gateway: CLAUDE_API, dashboard: CLAUDE_DASHBOARD_URL, source }
 }
 
-export const HERMES_UPGRADE_INSTRUCTIONS =
-  'For full features, install Hermes from source (`git clone https://github.com/NousResearch/hermes-agent && cd hermes-agent && pip install -e .`), then start the gateway on :8642 (`hermes gateway run`). For the extended APIs (Sessions, Skills, Config, Jobs) also start the dashboard on :9119 (`hermes dashboard`).'
+export const CLAUDE_UPGRADE_INSTRUCTIONS =
+  'For full features, install Hermes Agent from source (`git clone https://github.com/NousResearch/hermes-agent && cd hermes-agent && pip install -e .`), then start the gateway on :8642 (`hermes gateway run`). For the extended APIs (Sessions, Skills, Config, Jobs) also start the dashboard on :9119 (`hermes dashboard`).'
 
-export const SESSIONS_API_UNAVAILABLE_MESSAGE = `Your Hermes backend does not support the sessions API. ${HERMES_UPGRADE_INSTRUCTIONS}`
+export const DASHBOARD_REQUIRED_INSTRUCTIONS =
+  'Hermes gateway core APIs are healthy, but dashboard-backed APIs are unavailable. Start the dashboard on :9119 (`hermes dashboard`) or point HERMES_DASHBOARD_URL at the running dashboard service.'
+
+export const SESSIONS_API_UNAVAILABLE_MESSAGE = `Your Hermes backend does not support the sessions API. ${CLAUDE_UPGRADE_INSTRUCTIONS}`
 
 const PROBE_TIMEOUT_MS = 3_000
+// Probe TTL: 120s when the gateway is healthy, 15s when it isn't. The
+// shorter window during 'disconnected' state means a Docker stack where
+// the workspace boots before the agent recovers within ~15s of the agent
+// becoming reachable, instead of being stuck on the first failed probe
+// for two minutes. See #275.
 const PROBE_TTL_MS = 120_000
+const PROBE_TTL_DISCONNECTED_MS = 15_000
+
+function effectiveProbeTtl(caps: { health: boolean; chatCompletions: boolean }): number {
+  if (caps.health || caps.chatCompletions) return PROBE_TTL_MS
+  return PROBE_TTL_DISCONNECTED_MS
+}
 const DASHBOARD_TOKEN_REGEX =
-  /window\.__HERMES_SESSION_TOKEN__\s*=\s*["'](.+?)["']/
+  /window\._+(?:CLAUDE|HERMES)_+SESSION_+TOKEN__+\s*=\s*["']([^"']+)["']/
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -158,6 +177,31 @@ export type EnhancedCapabilities = {
   memory: boolean
   config: boolean
   jobs: boolean
+  mcp: boolean
+  /**
+   * Phase 1.5 — local-only fallback. True when the agent does NOT yet expose
+   * the `/api/mcp*` runtime endpoints but the dashboard `/api/config` route
+   * exposes a `mcp_servers` map AND the deployment is loopback-only. The
+   * workspace then performs CRUD against `config.mcp_servers` directly while
+   * disabling Test/Discover/Logs (which require runtime probing). Removed
+   * once hermes-agent ships native `/api/mcp*` endpoints.
+   */
+  mcpFallback: boolean
+  /**
+   * True when the dashboard exposes `/api/conductor/missions`. The Conductor
+   * UI requires this; if false, the screen renders an 'upstream not ready'
+   * placeholder instead of failing mid-action. See #262.
+   */
+  conductor: boolean
+  /**
+   * True when the dashboard exposes `/api/plugins/kanban/board` (the native
+   * Hermes kanban plugin shipped upstream). When available, the workspace's
+   * /swarm kanban surface can sync with the dashboard's kanban DB so both
+   * UIs read/write the same SQLite source of truth instead of running
+   * separate stores. When false, the workspace falls back to its local
+   * file-backed swarm-kanban store. See v2.3.0 plan.
+   */
+  kanban: boolean
 }
 
 export type DashboardCapabilities = {
@@ -179,7 +223,7 @@ export type GatewayMode =
   | 'portable'
   | 'disconnected'
 
-export type ChatMode = 'enhanced-hermes' | 'portable' | 'disconnected'
+export type ChatMode = 'enhanced-claude' | 'portable' | 'disconnected'
 
 export type ConnectionStatus =
   | 'connected'
@@ -200,9 +244,13 @@ let capabilities: GatewayCapabilities = {
   memory: false,
   config: false,
   jobs: false,
+  mcp: false,
+  mcpFallback: false,
+  conductor: false,
+  kanban: false,
   dashboard: {
     available: false,
-    url: HERMES_DASHBOARD_URL,
+    url: CLAUDE_DASHBOARD_URL,
   },
   probed: false,
 }
@@ -214,68 +262,35 @@ let dashboardTokenPromise: Promise<string> | null = null
 let dashboardTokenCache = ''
 
 /** Optional bearer token for authenticated gateway endpoints. */
-export const BEARER_TOKEN = process.env.HERMES_API_TOKEN || ''
+export const BEARER_TOKEN = process.env.HERMES_API_TOKEN || process.env.CLAUDE_API_TOKEN || ''
 
 /**
- * Optional explicit bearer token for dashboard API calls.
- *
- * Preferred over scraping the dashboard's root HTML for an inline token
- * (the legacy path, which creates a brittle trust boundary — see #124).
- * When set, the workspace uses this directly and never parses HTML.
- *
- * NOTE: do NOT fall back to HERMES_API_TOKEN here. The gateway and the
- * upstream Hermes dashboard use independent token schemes — the gateway
- * accepts a long-lived bearer (HERMES_API_TOKEN), while the dashboard
- * issues an ephemeral session token at boot (web_server.py:_SESSION_TOKEN).
- * Treating them as interchangeable wedges the workspace into 401 loops on
- * /api/sessions, /api/skills, etc. against the official dashboard. If
- * HERMES_DASHBOARD_TOKEN isn't set, leave this empty and let
- * fetchDashboardToken() fall through to the HTML-scrape legacy path.
+ * Dashboard API auth uses the ephemeral session token injected into the
+ * dashboard root HTML at startup. Do not reuse gateway bearer tokens here and
+ * do not trust a manually copied dashboard token env var — it goes stale every
+ * time the dashboard restarts.
  */
-const DASHBOARD_BEARER_TOKEN = process.env.HERMES_DASHBOARD_TOKEN || ''
-
 function authHeaders(): Record<string, string> {
   return BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
 }
 
-let loggedHtmlScrapeFallback = false
-
 /**
- * Resolve a bearer token for dashboard API calls.
- *
- * Lookup order:
- *   1.  HERMES_DASHBOARD_TOKEN / HERMES_API_TOKEN env (preferred)
- *   2.  Inline token injected into the dashboard's root HTML (legacy
- *      fallback — logs a deprecation warning; to be removed once all
- *      supported dashboards expose a first-class token endpoint). See #124.
+ * Resolve the current dashboard session token by scraping the dashboard root
+ * HTML. The dashboard injects a fresh ephemeral token at boot, so cached or
+ * manually copied env tokens become invalid after restarts.
  */
 export async function fetchDashboardToken(options?: {
   force?: boolean
 }): Promise<string> {
   const force = options?.force === true
 
-  // Prefer the explicit service-to-service token — no HTML scrape at all.
-  if (DASHBOARD_BEARER_TOKEN) {
-    dashboardTokenCache = DASHBOARD_BEARER_TOKEN
-    return DASHBOARD_BEARER_TOKEN
-  }
-
   if (!force && dashboardTokenCache) return dashboardTokenCache
   if (!force && dashboardTokenPromise) return dashboardTokenPromise
 
   dashboardTokenPromise = (async () => {
-    if (!loggedHtmlScrapeFallback) {
-      loggedHtmlScrapeFallback = true
-      console.warn(
-        '[gateway] HERMES_DASHBOARD_TOKEN is not set — falling back to the legacy ' +
-          'HTML-scrape token flow. This fallback will be removed in a future release. ' +
-          'Set HERMES_DASHBOARD_TOKEN (or HERMES_API_TOKEN) to a dashboard bearer ' +
-          'token to migrate. See #124.',
-      )
-    }
     // Dashboard injects the session token inline on `/` (root), not on
     // `/index.html` which serves the raw Vite-built HTML without the token.
-    const res = await fetch(`${HERMES_DASHBOARD_URL}/`, {
+    const res = await fetch(`${CLAUDE_DASHBOARD_URL}/`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
     if (!res.ok) {
@@ -312,7 +327,7 @@ export async function dashboardAuthHeaders(options?: {
 
 function withDashboardBase(path: string): string {
   if (/^https?:\/\//i.test(path)) return path
-  return `${HERMES_DASHBOARD_URL}${path.startsWith('/') ? path : `/${path}`}`
+  return `${CLAUDE_DASHBOARD_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
 export async function dashboardFetch(
@@ -355,11 +370,31 @@ export async function dashboardFetch(
   return res
 }
 
+/**
+ * Lightweight fetch helper that targets the gateway base URL
+ * (`CLAUDE_API`, e.g. http://127.0.0.1:8645). Used for endpoints that
+ * live on the gateway runtime rather than the dashboard, like
+ * `/health/detailed`.
+ */
+export async function gatewayFetch(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const url = /^https?:\/\//i.test(path)
+    ? path
+    : `${CLAUDE_API}${path.startsWith('/') ? path : `/${path}`}`
+  const headers = new Headers(init.headers)
+  for (const [k, v] of Object.entries(authHeaders())) {
+    if (!headers.has(k)) headers.set(k, v)
+  }
+  return fetch(url, { ...init, headers })
+}
+
 // ── Probing ───────────────────────────────────────────────────────
 
 async function probe(path: string): Promise<boolean> {
   try {
-    const res = await fetch(`${HERMES_API}${path}`, {
+    const res = await fetch(`${CLAUDE_API}${path}`, {
       headers: authHeaders(),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
@@ -370,9 +405,51 @@ async function probe(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Stricter probe for the legacy enhanced chat-stream endpoint.
+ *
+ * The previous probe used a generic GET and treated any non-404/403 status
+ * as "available". That misclassified vanilla hermes-agent (which serves a
+ * router-level handler that 405s/400s GETs to that path) as having the
+ * enhanced fork's session-stream capability. Workspace then fell through
+ * to streamChat() which posts to /api/sessions/{id}/chat/stream — vanilla
+ * agent returns 404 there at runtime and chat appears to fail with
+ * "Authentication error" because the bundle's error mapper is overly
+ * generous about what it interprets as auth failures. See #261.
+ *
+ * Real enhanced-fork gateways respond to GET on the probe path with one
+ * of: 405 Method Not Allowed (it's POST-only there too) but also expose
+ * the path in their router; we cannot distinguish reliably from a generic
+ * status code on GET, so we POST a tiny no-op body and look for a
+ * structured error shape that only the fork emits.
+ */
+async function probeEnhancedChatStream(): Promise<boolean> {
+  try {
+    const res = await fetch(`${CLAUDE_API}/api/sessions/__probe__/chat/stream`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    // Vanilla hermes-agent has no such endpoint — dashboard layer 404s,
+    // gateway 404s, anything in between 404s. Enhanced fork accepts POST
+    // and returns either a 4xx structured error (validation) or starts a
+    // stream; either way the path is registered.
+    if (res.status === 404 || res.status === 403) return false
+    // 405 = the path exists but POST is wrong. That's still vanilla — no
+    // enhanced fork would 405 a POST to its own chat/stream endpoint.
+    if (res.status === 405) return false
+    // 401 means auth gate is wired; treat as available so token-gated
+    // setups don't get downgraded by a missing token at probe time.
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function probeChatCompletions(): Promise<boolean> {
   try {
-    const getRes = await fetch(`${HERMES_API}/v1/chat/completions`, {
+    const getRes = await fetch(`${CLAUDE_API}/v1/chat/completions`, {
       method: 'GET',
       headers: authHeaders(),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
@@ -387,20 +464,171 @@ async function probeChatCompletions(): Promise<boolean> {
   }
 }
 
-async function probeDashboard(): Promise<{ available: boolean; url: string }> {
+/**
+ * Strict MCP capability probe.
+ *
+ * Per plan §Open Questions #4: probing `dashboard.available || /api/mcp` is
+ * insufficient. The probe must hit `GET /api/mcp` directly and verify both:
+ *   1. 200 OK
+ *   2. Body parses through normalizeMcpList (i.e. shape is recognizable)
+ * If the dashboard is up but `/api/mcp` is absent (404) or returns a
+ * malformed body, capability is `false`.
+ */
+async function probeMcp(): Promise<boolean> {
+  const { normalizeMcpList } = await import('./mcp-normalize')
+  const validate = async (res: Response): Promise<boolean> => {
+    if (!res.ok) return false
+    const body = (await res.json().catch(() => null)) as unknown
+    if (body === null) return false
+    // Empty list is a valid configured-zero state — still indicates the
+    // endpoint is real. The shape check is "does the normalizer accept it
+    // without throwing", which it does for `{servers: []}`, `[]`, etc.
+    void normalizeMcpList(body)
+    return true
+  }
+  // Use dashboardFetch so the probe goes through the same authenticated path
+  // workspace routes use at runtime — otherwise an auth-protected dashboard
+  // /api/mcp would falsely report capability=false (Codex MAJOR finding).
   try {
-    const res = await fetch(`${HERMES_DASHBOARD_URL}/api/status`, {
+    const res = await dashboardFetch('/api/mcp', {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     })
-    if (!res.ok) return { available: false, url: HERMES_DASHBOARD_URL }
-    const body = (await res.json()) as { version?: string }
-    if (!body.version) return { available: false, url: HERMES_DASHBOARD_URL }
-    await fetchDashboardToken().catch(() => '')
-    return { available: true, url: HERMES_DASHBOARD_URL }
+    if (await validate(res)) return true
   } catch {
-    return { available: false, url: HERMES_DASHBOARD_URL }
+    // fall through to gateway path
+  }
+  try {
+    const res = await fetch(`${CLAUDE_API}/api/mcp`, {
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    return await validate(res)
+  } catch {
+    return false
   }
 }
+
+/**
+ * Conservative loopback check. Returns true ONLY when:
+ *   1. Both `CLAUDE_API` and `CLAUDE_DASHBOARD_URL` resolve to a loopback host
+ *      (`127.0.0.1`, `::1`, or `localhost`).
+ *   2. Workspace `HOST` env is unset OR loopback. Any non-loopback `HOST`
+ *      (including `0.0.0.0`) disables fallback so we never silently expose a
+ *      remote-deploy to plaintext config.yaml writes.
+ *
+ * On any parse failure we return false. Better to under-enable than to
+ * silently enable on a remote deployment.
+ */
+export function isLocalhostDeployment(): boolean {
+  const isLoopbackHost = (host: string): boolean => {
+    const h = host.trim().toLowerCase()
+    if (!h) return false
+    return h === '127.0.0.1' || h === '::1' || h === 'localhost' || h === '[::1]'
+  }
+  const isLoopbackUrl = (raw: string): boolean => {
+    try {
+      const u = new URL(raw)
+      return isLoopbackHost(u.hostname)
+    } catch {
+      return false
+    }
+  }
+  const host = (process.env.HOST || '').trim()
+  if (host && !isLoopbackHost(host)) return false
+  return isLoopbackUrl(CLAUDE_API) && isLoopbackUrl(CLAUDE_DASHBOARD_URL)
+}
+
+/**
+ * Probe whether the dashboard's `/api/config` payload includes an
+ * `mcp_servers` entry. The presence of the key (even if empty) signals that
+ * config-fallback CRUD is safe to expose.
+ *
+ * Used as part of the `mcpFallback` capability gate.
+ */
+async function probeMcpConfigKey(): Promise<boolean> {
+  try {
+    const { getConfig } = await import('./claude-dashboard-api')
+    const cfg = await getConfig()
+    if (typeof cfg !== 'object') return false
+    if ('mcp_servers' in cfg) return true
+    const inner =
+      cfg.config && typeof cfg.config === 'object'
+        ? (cfg.config as Record<string, unknown>)
+        : null
+    return inner ? 'mcp_servers' in inner : false
+  } catch {
+    return false
+  }
+}
+
+async function probeDashboard(): Promise<{ available: boolean; url: string }> {
+  try {
+    const res = await fetch(`${CLAUDE_DASHBOARD_URL}/api/status`, {
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (!res.ok) return { available: false, url: CLAUDE_DASHBOARD_URL }
+    const body = (await res.json()) as { version?: string }
+    if (!body.version) return { available: false, url: CLAUDE_DASHBOARD_URL }
+    await fetchDashboardToken().catch(() => '')
+    return { available: true, url: CLAUDE_DASHBOARD_URL }
+  } catch {
+    return { available: false, url: CLAUDE_DASHBOARD_URL }
+  }
+}
+
+/**
+ * Lightweight probe for the Conductor mission endpoint. Some dashboard builds
+ * ship without it; those deployments should show a graceful placeholder
+ * instead of letting the Conductor UI 500. See #262.
+ */
+async function probeConductor(dashboardAvailable: boolean): Promise<boolean> {
+  if (!dashboardAvailable) return false
+  try {
+    const res = await dashboardFetch('/api/conductor/missions', {
+      method: 'GET',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (res.status === 404 || res.status === 405) return false
+    // 401 means the path exists but the auth token isn't accepted yet —
+    // treat as available so token-gated setups don't hide the feature.
+    if (res.status === 401) return true
+
+    const contentType = res.headers.get('content-type') ?? ''
+    // Vite/TanStack's SPA fallback returns HTTP 200 + text/html for missing
+    // API routes. Do not mark Conductor available unless the dashboard gives
+    // us a JSON API response; otherwise /api/conductor-spawn tries to POST to
+    // the dashboard and the user sees "Method Not Allowed".
+    if (!contentType.toLowerCase().includes('application/json')) return false
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Lightweight probe for the upstream Hermes kanban plugin. When the dashboard
+ * exposes `/api/plugins/kanban/board` we assume the kanban plugin is loaded
+ * and the workspace can sync its /swarm kanban surface with the dashboard's
+ * SQLite-backed kanban DB. Mounted by hermes_cli.web_server
+ * `_mount_plugin_api_routes()`. See v2.3.0 plan.
+ */
+async function probeKanban(dashboardAvailable: boolean): Promise<boolean> {
+  if (!dashboardAvailable) return false
+  try {
+    const res = await dashboardFetch('/api/plugins/kanban/board', {
+      method: 'GET',
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    })
+    if (res.status === 404 || res.status === 405) return false
+    // The plugin route is unauthenticated by design (loopback-only), so
+    // 200 is the normal success. Some auth setups may return 401 — still
+    // means the route exists.
+    return true
+  } catch {
+    return false
+  }
+}
+
 
 // Vanilla hermes-agent 0.10.0 satisfies: health, chatCompletions, models, streaming,
 // sessions, skills, config, jobs. Dashboard-only endpoints (themes/plugins) and the
@@ -413,7 +641,42 @@ const OPTIONAL_APIS = new Set([
   'memory',
   'dashboard',
   'enhancedChat',
+  'mcp',
+  'mcpFallback',
 ])
+
+const DASHBOARD_BACKED_APIS = new Set([
+  'sessions',
+  'skills',
+  'config',
+  'jobs',
+  'mcp',
+  'mcpFallback',
+  'conductor',
+  'kanban',
+])
+
+export function getCapabilityWarningMessage(
+  next: GatewayCapabilities,
+  criticalMissing: string[],
+): string | null {
+  if (criticalMissing.length === 0 || (!next.health && !next.dashboard.available)) {
+    return null
+  }
+
+  const dashboardBackedMissing = criticalMissing.filter((key) =>
+    DASHBOARD_BACKED_APIS.has(key),
+  )
+  if (
+    !next.dashboard.available &&
+    next.chatCompletions &&
+    dashboardBackedMissing.length === criticalMissing.length
+  ) {
+    return `[gateway] ${DASHBOARD_REQUIRED_INSTRUCTIONS}`
+  }
+
+  return `[gateway] Missing Hermes APIs detected. ${CLAUDE_UPGRADE_INSTRUCTIONS}`
+}
 
 function logCapabilities(next: GatewayCapabilities): void {
   const core: Array<string> = []
@@ -433,6 +696,8 @@ function logCapabilities(next: GatewayCapabilities): void {
     'memory',
     'config',
     'jobs',
+    'mcp',
+    'mcpFallback',
   ]
 
   for (const key of coreKeys) {
@@ -445,21 +710,20 @@ function logCapabilities(next: GatewayCapabilities): void {
   else missing.push('dashboard')
 
   const mode = getGatewayMode()
-  const summary = `[gateway] gateway=${HERMES_API} dashboard=${next.dashboard.url} mode=${mode} core=[${core.join(', ')}] enhanced=[${enhanced.join(', ')}] missing=[${missing.join(', ')}]`
+  const summary = `[gateway] gateway=${CLAUDE_API} dashboard=${next.dashboard.url} mode=${mode} core=[${core.join(', ')}] enhanced=[${enhanced.join(', ')}] missing=[${missing.join(', ')}]`
   if (summary === lastLoggedSummary) return
   lastLoggedSummary = summary
   console.log(summary)
 
   const criticalMissing = missing.filter((key) => !OPTIONAL_APIS.has(key))
-  if (criticalMissing.length > 0 && (next.health || next.dashboard.available)) {
-    console.warn(
-      `[gateway] Missing Hermes APIs detected. ${HERMES_UPGRADE_INSTRUCTIONS}`,
-    )
+  const warning = getCapabilityWarningMessage(next, criticalMissing)
+  if (warning) {
+    console.warn(warning)
   }
 }
 
 async function autoDetectGatewayUrl(): Promise<void> {
-  if (process.env.HERMES_API_URL) return
+  if (process.env.HERMES_API_URL || process.env.CLAUDE_API_URL) return
 
   const candidates = [
     'http://127.0.0.1:8642',
@@ -473,8 +737,8 @@ async function autoDetectGatewayUrl(): Promise<void> {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       })
       if (res.ok) {
-        HERMES_API = candidate
-        console.log(`[gateway] Connected to Hermes gateway at ${HERMES_API}`)
+        CLAUDE_API = candidate
+        console.log(`[gateway] Connected to Hermes gateway at ${CLAUDE_API}`)
         return
       }
     } catch {
@@ -491,7 +755,7 @@ async function autoDetectGatewayUrl(): Promise<void> {
 }
 
 async function autoDetectDashboardUrl(): Promise<void> {
-  if (process.env.HERMES_DASHBOARD_URL) return
+  if (process.env.CLAUDE_DASHBOARD_URL) return
 
   const candidates = ['http://127.0.0.1:9119']
   for (const candidate of candidates) {
@@ -500,7 +764,7 @@ async function autoDetectDashboardUrl(): Promise<void> {
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       })
       if (res.ok) {
-        HERMES_DASHBOARD_URL = candidate
+        CLAUDE_DASHBOARD_URL = candidate
         return
       }
     } catch {
@@ -538,12 +802,32 @@ export async function probeGateway(options?: {
       probeChatCompletions(),
       probe('/v1/models'),
       probe('/api/sessions'),
-      probe('/api/sessions/__probe__/chat/stream'),
+      probeEnhancedChatStream(),
       probe('/api/skills'),
       probe('/api/config'),
       probe('/api/jobs'),
       probeDashboard(),
     ])
+
+    // Strict MCP probe runs after dashboard probe so dashboard token
+    // resolution (in-page HTML scrape fallback) has had a chance to populate
+    // the cache when the dashboard is up.
+    const mcp = await probeMcp()
+
+    // Conductor probe runs after dashboard probe.
+    const conductor = await probeConductor(dashboard.available)
+    const kanban = await probeKanban(dashboard.available)
+
+    // Phase 1.5 fallback: when native /api/mcp is missing but the dashboard
+    // exposes `config.mcp_servers` AND we are loopback-only, allow a config
+    // -backed CRUD path. Test/Discover/Logs remain disabled in this mode.
+    const dashboardConfigAvailable = dashboard.available || legacyConfig
+    const mcpFallback =
+      !mcp &&
+      dashboard.available &&
+      dashboardConfigAvailable &&
+      isLocalhostDeployment() &&
+      (await probeMcpConfigKey())
 
     capabilities = {
       health,
@@ -560,6 +844,10 @@ export async function probeGateway(options?: {
       memory: true,
       config: dashboard.available || legacyConfig,
       jobs: dashboard.available || legacyJobs,
+      mcp,
+      mcpFallback,
+      conductor,
+      kanban,
       dashboard,
     }
     lastProbeAt = Date.now()
@@ -575,11 +863,21 @@ export async function probeGateway(options?: {
 }
 
 export async function ensureGatewayProbed(): Promise<GatewayCapabilities> {
-  const isStale = Date.now() - lastProbeAt > PROBE_TTL_MS
+  const isStale =
+    Date.now() - lastProbeAt > effectiveProbeTtl(capabilities)
   if (!capabilities.probed || isStale) {
     return probeGateway({ force: isStale })
   }
   return capabilities
+}
+
+/**
+ * Force-reprobe regardless of TTL. Used by the UI 'Reconnect' action
+ * and by any tool that wants to validate the current state immediately
+ * (for example after a docker compose restart). See #275.
+ */
+export async function forceReprobeGateway(): Promise<GatewayCapabilities> {
+  return probeGateway({ force: true })
 }
 
 // ── Accessors ─────────────────────────────────────────────────────
@@ -606,6 +904,10 @@ export function getEnhancedCapabilities(): EnhancedCapabilities {
     memory: capabilities.memory,
     config: capabilities.config,
     jobs: capabilities.jobs,
+    mcp: capabilities.mcp,
+    mcpFallback: capabilities.mcpFallback,
+    conductor: capabilities.conductor,
+    kanban: capabilities.kanban,
   }
 }
 
@@ -627,12 +929,12 @@ export function getGatewayMode(): GatewayMode {
 
 /**
  * UI-facing chat transport mode:
- * - enhanced-hermes: legacy fork session streaming API available
+ * - enhanced-claude: legacy fork session streaming API available
  * - portable: OpenAI-compatible /v1/chat/completions transport
  * - disconnected: no usable chat backend
  */
 export function getChatMode(): ChatMode {
-  if (capabilities.enhancedChat) return 'enhanced-hermes'
+  if (capabilities.enhancedChat) return 'enhanced-claude'
   if (capabilities.chatCompletions || capabilities.health) return 'portable'
   return 'disconnected'
 }
@@ -650,7 +952,7 @@ export function getConnectionStatus(): ConnectionStatus {
   return 'connected'
 }
 
-export function isHermesConnected(): boolean {
+export function isClaudeConnected(): boolean {
   return capabilities.health || capabilities.dashboard.available
 }
 

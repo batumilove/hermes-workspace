@@ -18,7 +18,6 @@ import {
   MenuRoot,
   MenuTrigger,
 } from '@/components/ui/menu'
-import { useChatSettingsStore } from '@/hooks/use-chat-settings'
 
 type SessionItemProps = {
   session: SessionMeta
@@ -35,24 +34,21 @@ const dayFormatter = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
 })
 
-function formatSessionTimestamp(
-  timestamp: number | undefined | null,
-  use24HourTime: boolean,
-): string {
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric',
+  minute: '2-digit',
+})
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function formatSessionTimestamp(timestamp?: number | null): string {
   if (!timestamp) return ''
   const date = new Date(timestamp)
   const now = new Date()
   const sameDay = date.toDateString() === now.toDateString()
-  const timeFormatter = new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: !use24HourTime,
-  })
   return (sameDay ? timeFormatter : dayFormatter).format(date)
 }
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function isUuidLike(value: string): boolean {
   return UUID_PATTERN.test(value.trim())
@@ -87,6 +83,9 @@ function getSessionDisplayTitle(
   const derivedTitle = normalizeTitleValue(session.derivedTitle)
   if (derivedTitle) return derivedTitle
 
+  const title = normalizeTitleValue(session.title)
+  if (title) return title
+
   if (isGenerating) return 'Naming…'
   const shortId = getSessionShortId(session)
   return shortId ? `Session ${shortId}` : 'Session'
@@ -106,9 +105,6 @@ function SessionItemComponent({
   onRename,
   onDelete,
 }: SessionItemProps) {
-  const use24HourTime = useChatSettingsStore(
-    (state) => state.settings.use24HourTime,
-  )
   const isGenerating = session.titleStatus === 'generating'
   const isError = session.titleStatus === 'error'
   const baseTitle = getSessionDisplayTitle(session, isGenerating)
@@ -124,11 +120,11 @@ function SessionItemComponent({
       return session.titleError || 'Could not generate a title'
     }
     const parts: Array<string> = []
-    const formatted = formatSessionTimestamp(updatedAt, use24HourTime)
+    const formatted = formatSessionTimestamp(updatedAt)
     if (formatted) parts.push(formatted)
     if (session.friendlyId) parts.push(getFriendlyIdLabel(session.friendlyId))
     return parts.join(' • ')
-  }, [isError, session.friendlyId, session.titleError, updatedAt, use24HourTime])
+  }, [isError, session.friendlyId, session.titleError, updatedAt])
 
   return (
     <Link
@@ -136,7 +132,7 @@ function SessionItemComponent({
       params={{ sessionKey: session.friendlyId }}
       onClick={() => {
         try {
-          localStorage.setItem('hermes-last-session', session.friendlyId)
+          localStorage.setItem('claude-last-session', session.friendlyId)
         } catch {}
         onSelect?.()
       }}

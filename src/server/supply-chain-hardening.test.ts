@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -11,10 +11,7 @@ function read(path: string): string {
 function workflowFiles(): Array<{ path: string; content: string }> {
   return readdirSync(join(repoRoot, '.github', 'workflows'))
     .filter((name) => /\.ya?ml$/.test(name))
-    .map((name) => ({
-      path: `.github/workflows/${name}`,
-      content: read(`.github/workflows/${name}`),
-    }))
+    .map((name) => ({ path: `.github/workflows/${name}`, content: read(`.github/workflows/${name}`) }))
 }
 
 function trackedTextFiles(): Array<{ path: string; content: string }> {
@@ -23,11 +20,16 @@ function trackedTextFiles(): Array<{ path: string; content: string }> {
     'CHANGELOG.md',
     'install.sh',
     'vite.config.ts',
+    'src/server/claude-agent.ts',
     'src/server/hermes-agent.ts',
+    'src/server/update-system.ts',
+    'src/components/connection-startup-screen.tsx',
     'docs/AGENT-PAIRING.md',
   ]
 
-  return candidates.map((path) => ({ path, content: read(path) }))
+  return candidates
+    .filter((path) => existsSync(join(repoRoot, path)))
+    .map((path) => ({ path, content: read(path) }))
 }
 
 describe('supply-chain hardening', () => {
@@ -36,10 +38,7 @@ describe('supply-chain hardening', () => {
       content
         .split('\n')
         .map((line, index) => ({ line, index: index + 1 }))
-        .filter(
-          ({ line }) =>
-            /pnpm\s+install/.test(line) && !/--frozen-lockfile/.test(line),
-        )
+        .filter(({ line }) => /pnpm\s+install/.test(line) && !/--frozen-lockfile/.test(line))
         .map(({ line, index }) => `${path}:${index}: ${line.trim()}`),
     )
 
@@ -47,15 +46,11 @@ describe('supply-chain hardening', () => {
   })
 
   it('keeps dependency install scripts disabled by default', () => {
-    const npmrc = read('.npmrc')
-
-    expect(npmrc).toMatch(/^ignore-scripts\s*=\s*true$/m)
+    expect(read('.npmrc')).toMatch(/^ignore-scripts\s*=\s*true$/m)
   })
 
   it('enforces an npm registry age cooldown for new package versions', () => {
-    const npmrc = read('.npmrc')
-
-    expect(npmrc).toMatch(/^minimum-release-age\s*=\s*10080$/m)
+    expect(read('.npmrc')).toMatch(/^minimum-release-age\s*=\s*10080$/m)
   })
 
   it('does not keep curl-pipe-shell installer instructions in tracked docs or runtime messages', () => {

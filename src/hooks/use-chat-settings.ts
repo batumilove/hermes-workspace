@@ -5,7 +5,7 @@ import { persist } from 'zustand/middleware'
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type LoaderStyle =
   | 'dots'
-  | 'braille-hermes'
+  | 'braille-claude'
   | 'braille-orbit'
   | 'braille-breathe'
   | 'braille-pulse'
@@ -53,7 +53,6 @@ export type ChatSettings = {
    * surprised by sound on next page load.
    */
   soundOnChatComplete: boolean
-  use24HourTime: boolean
 }
 
 type ChatSettingsState = {
@@ -73,7 +72,6 @@ function defaultChatSettings(): ChatSettings {
     chatWidth: 'comfortable',
     sidebarHoverExpand: false,
     soundOnChatComplete: false,
-    use24HourTime: false,
   }
 }
 

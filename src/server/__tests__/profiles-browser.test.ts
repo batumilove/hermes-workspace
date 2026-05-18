@@ -38,6 +38,7 @@ vi.mock('node:os', () => ({
 beforeEach(() => {
   vi.clearAllMocks()
   delete process.env.HERMES_HOME
+  delete process.env.CLAUDE_HOME
 })
 
 async function loadMod() {
@@ -46,6 +47,42 @@ async function loadMod() {
 }
 
 describe('profiles-browser', () => {
+  describe('listProfiles', () => {
+    it('includes symlinked profiles when the target is a directory', async () => {
+      const root = path.join('/home/testuser', '.hermes')
+      const profilesRoot = path.join(root, 'profiles')
+      const kayPath = path.join(profilesRoot, 'kay')
+      const brokenPath = path.join(profilesRoot, 'broken')
+
+      existsSync.mockImplementation((p: string) => {
+        return p === root || p === profilesRoot || p === kayPath || p === brokenPath
+      })
+      readdirSync.mockImplementation((p: string) => {
+        if (p === profilesRoot) {
+          return [
+            { name: 'kay', isDirectory: () => false, isSymbolicLink: () => true },
+            { name: 'broken', isDirectory: () => false, isSymbolicLink: () => true },
+            { name: 'README.md', isDirectory: () => false, isSymbolicLink: () => false },
+          ] as never
+        }
+        return []
+      })
+      statSync.mockImplementation((p: string) => {
+        if (p === kayPath) return { isDirectory: () => true, isFile: () => false, mtimeMs: 0 } as never
+        if (p === brokenPath) throw new Error('broken symlink')
+        return { isDirectory: () => false, isFile: () => false, mtimeMs: 0 } as never
+      })
+
+      const mod = await loadMod()
+      const names = mod.listProfiles().map((profile) => profile.name)
+
+      expect(names).toContain('default')
+      expect(names).toContain('kay')
+      expect(names).not.toContain('broken')
+      expect(names).not.toContain('README.md')
+    })
+  })
+
   describe('setActiveProfile', () => {
     it('emits console.warn about gateway restart when setting non-default profile', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -58,7 +95,7 @@ describe('profiles-browser', () => {
       const mod = await loadMod()
       mod.setActiveProfile('jarvis')
       expect(warnSpy).toHaveBeenCalledTimes(1)
-      expect(warnSpy.mock.calls[0][0]).toContain('Restart the Hermes gateway')
+      expect(warnSpy.mock.calls[0][0]).toContain('Restart the Hermes Agent gateway')
 
       warnSpy.mockRestore()
     })

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Cancel01Icon } from '@hugeicons/core-free-icons'
-import type { HermesJob } from '@/lib/jobs-api'
+import type { ClaudeJob, JobProfileOption } from '@/lib/jobs-api'
 
 const SCHEDULE_PRESETS = [
   { label: 'Every 15m', value: 'every 15m' },
@@ -18,11 +18,13 @@ const SCHEDULE_PRESETS = [
 const DELIVERY_OPTIONS = ['local', 'telegram', 'discord'] as const
 
 type EditJobDialogProps = {
-  job: HermesJob | null
+  job: ClaudeJob | null
   open: boolean
   isSubmitting?: boolean
+  profiles: Array<JobProfileOption>
   onOpenChange: (open: boolean) => void
   onSubmit: (input: {
+    profile: string
     name: string
     schedule: string
     prompt: string
@@ -32,12 +34,12 @@ type EditJobDialogProps = {
   }) => void | Promise<void>
 }
 
-function readScheduleValue(job: HermesJob): string {
+function readScheduleValue(job: ClaudeJob): string {
   if (typeof job.schedule_display === 'string' && job.schedule_display.trim()) {
     return job.schedule_display.trim()
   }
   const schedule = job.schedule
-  if (schedule && typeof schedule === 'object') {
+  if (typeof schedule === 'object') {
     const record = schedule
     const candidates = [
       record.expression,
@@ -55,7 +57,7 @@ function readScheduleValue(job: HermesJob): string {
   return ''
 }
 
-function getInitialState(job: HermesJob | null) {
+function getInitialState(job: ClaudeJob | null) {
   const repeatTimes = job?.repeat?.times
   const repeatCompleted = job?.repeat?.completed ?? 0
   const remainingRepeats =
@@ -64,6 +66,7 @@ function getInitialState(job: HermesJob | null) {
       : null
 
   return {
+    profile: job?.profile ?? 'default',
     name: job?.name ?? '',
     schedule: job ? readScheduleValue(job) : 'every 30m',
     prompt: job?.prompt ?? '',
@@ -82,6 +85,7 @@ export function EditJobDialog({
   job,
   open,
   isSubmitting = false,
+  profiles,
   onOpenChange,
   onSubmit,
 }: EditJobDialogProps) {
@@ -133,6 +137,7 @@ export function EditJobDialog({
       .filter(Boolean)
 
     void onSubmit({
+      profile: form.profile,
       name: form.name.trim(),
       schedule: form.schedule.trim(),
       prompt: form.prompt.trim(),
@@ -203,6 +208,49 @@ export function EditJobDialog({
             </div>
 
             <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+              <section className="space-y-2">
+                <label className="text-sm font-medium">Profile</label>
+                <select
+                  value={form.profile}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      profile: event.target.value,
+                    }))
+                  }
+                  required
+                  className="w-full rounded-xl border px-3 py-2.5 text-sm focus:outline-none focus:ring-1"
+                  style={{
+                    background: 'var(--theme-input)',
+                    borderColor: 'var(--theme-border)',
+                    color: 'var(--theme-text)',
+                  }}
+                >
+                  {profiles.map((profile) => (
+                    <option key={profile.name} value={profile.name}>
+                      {profile.name}
+                      {profile.active ? ' (active)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {job.profile && form.profile !== job.profile ? (
+                  <p
+                    className="text-xs"
+                    style={{ color: 'var(--theme-muted)' }}
+                  >
+                    Saving will recreate this cron job in {form.profile} and
+                    remove it from {job.profile}.
+                  </p>
+                ) : (
+                  <p
+                    className="text-xs"
+                    style={{ color: 'var(--theme-muted)' }}
+                  >
+                    Cron jobs are stored under the selected Hermes profile.
+                  </p>
+                )}
+              </section>
+
               <section className="space-y-2">
                 <label className="text-sm font-medium">Name</label>
                 <input
@@ -296,7 +344,7 @@ export function EditJobDialog({
                       prompt: event.target.value,
                     }))
                   }
-                  placeholder="What should Hermes do?"
+                  placeholder="What should Hermes Agent do?"
                   required
                   rows={5}
                   className="w-full resize-none rounded-xl border px-3 py-2.5 text-sm focus:outline-none focus:ring-1"
@@ -353,7 +401,7 @@ export function EditJobDialog({
                           onClick={() => toggleDelivery(option)}
                           title={
                             needsGateway
-                              ? `Requires Hermes Gateway with ${option} configured`
+                              ? `Requires Hermes Agent gateway with ${option} configured`
                               : undefined
                           }
                           className="rounded-full border px-3 py-1.5 text-xs font-medium capitalize transition-colors"
