@@ -3,7 +3,6 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { Add01Icon, Chat01Icon } from '@hugeicons/core-free-icons'
 import type { SessionMeta } from '@/screens/chat/types'
 import { cn } from '@/lib/utils'
-import { useChatSettingsStore } from '@/hooks/use-chat-settings'
 
 type Props = {
   open: boolean
@@ -35,19 +34,17 @@ const dayFormatter = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
 })
 
-function formatUpdatedAt(
-  updatedAt: number | undefined,
-  use24HourTime: boolean,
-): string {
+const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric',
+  minute: '2-digit',
+})
+
+function formatUpdatedAt(updatedAt?: number): string {
   if (typeof updatedAt !== 'number') return ''
   const value = new Date(updatedAt)
   const now = new Date()
   if (value.toDateString() === now.toDateString()) {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: !use24HourTime,
-    }).format(value)
+    return timeFormatter.format(value)
   }
   return dayFormatter.format(value)
 }
@@ -60,10 +57,6 @@ export function MobileSessionsPanel({
   onSelectSession,
   onNewChat,
 }: Props) {
-  const use24HourTime = useChatSettingsStore(
-    (state) => state.settings.use24HourTime,
-  )
-
   useEffect(() => {
     if (!open) return
     function handleKeyDown(event: KeyboardEvent) {
@@ -127,10 +120,7 @@ export function MobileSessionsPanel({
               <div className="space-y-1">
                 {sessions.map((session) => {
                   const active = session.friendlyId === activeFriendlyId
-                  const timestamp = formatUpdatedAt(
-                    session.updatedAt,
-                    use24HourTime,
-                  )
+                  const timestamp = formatUpdatedAt(session.updatedAt)
                   return (
                     <button
                       key={session.key}

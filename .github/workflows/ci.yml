@@ -2,9 +2,6 @@
 # Runs on all PRs and pushes to main
 
 name: CI
-permissions:
-  contents: read
-
 
 on:
   push:
@@ -16,7 +13,6 @@ jobs:
   build:
     name: Build & Lint
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -60,7 +56,6 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     needs: build
 
     steps:

@@ -1,34 +1,37 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
-import { useSearch } from '@tanstack/react-router'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'motion/react'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Add01Icon, CheckListIcon, RefreshIcon } from '@hugeicons/core-free-icons'
 import { TaskCard } from './task-card'
 import { TaskDialog } from './task-dialog'
+import type { ClaudeTask, CreateTaskInput, TaskAssignee, TaskColumn } from '@/lib/tasks-api'
 import { toast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import {
-  fetchTasks,
-  fetchAssignees,
-  createTask,
-  updateTask,
-  deleteTask,
-  moveTask,
+  COLUMN_COLORS,
   COLUMN_LABELS,
   COLUMN_ORDER,
-  COLUMN_COLORS,
+  createTask,
+  deleteTask,
+  fetchAssignees,
+  fetchTasks,
   isOverdue,
+  launchSession,
+  linkSession,
+  moveTask,
+  updateTask,
 } from '@/lib/tasks-api'
-import type { HermesTask, TaskColumn, CreateTaskInput, TaskAssignee } from '@/lib/tasks-api'
+import { stashPendingSend } from '@/screens/chat/pending-send'
 
-const QUERY_KEY = ['hermes', 'tasks'] as const
-const ASSIGNEES_KEY = ['hermes', 'tasks', 'assignees'] as const
+const QUERY_KEY = ['claude', 'tasks'] as const
+const ASSIGNEES_KEY = ['claude', 'tasks', 'assignees'] as const
 
 export const TASKS_BOARD_HELP_TEXT =
-  'Drag cards to change status. Open a card to set assignee and due date.'
+  'Workspace Tasks is a lightweight task board. Drag cards to change status. Use Dashboard Kanban for native multi-board controls.'
 
 function SkeletonCard() {
   return (
@@ -48,12 +51,13 @@ export function TasksScreen() {
   const queryClient = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [createColumn, setCreateColumn] = useState<TaskColumn>('backlog')
-  const [editingTask, setEditingTask] = useState<HermesTask | null>(null)
+  const [editingTask, setEditingTask] = useState<ClaudeTask | null>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverColumn, setDragOverColumn] = useState<TaskColumn | null>(null)
   const [showDone, setShowDone] = useState(false)
 
   const search = useSearch({ from: '/tasks' })
+  const navigate = useNavigate()
   const initialAssignee = typeof search.assignee === 'string' ? search.assignee : null
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(initialAssignee)
 
@@ -84,12 +88,12 @@ export function TasksScreen() {
   const tasks = tasksQuery.data ?? []
 
   const tasksByColumn = useMemo(() => {
-    const map: Record<TaskColumn, Array<HermesTask>> = {
-      backlog: [], todo: [], in_progress: [], review: [], done: [],
+    const map: Record<TaskColumn, Array<ClaudeTask>> = {
+      backlog: [], todo: [], in_progress: [], review: [], blocked: [], done: [], deleted: [],
     }
     for (const t of tasks) {
       if (assigneeFilter && t.assignee !== assigneeFilter) continue
-      if (map[t.column]) map[t.column].push(t)
+      map[t.column].push(t)
     }
     for (const col of COLUMN_ORDER) {
       map[col].sort((a, b) => a.position - b.position)
@@ -99,11 +103,12 @@ export function TasksScreen() {
 
   const stats = useMemo(() => {
     const total = tasks.length
-    const inProgress = tasks.filter(t => t.column === 'in_progress').length
+    const running = tasks.filter(t => t.column === 'in_progress').length
+    const blocked = tasks.filter(t => t.column === 'blocked').length
     const done = tasks.filter(t => t.column === 'done').length
     const overdue = tasks.filter(t => isOverdue(t) && t.column !== 'done').length
     const completion = total > 0 ? Math.round((done / total) * 100) : 0
-    return { total, inProgress, done, overdue, completion }
+    return { total, running, blocked, done, overdue, completion }
   }, [tasks])
 
   const invalidate = useCallback(() => {
@@ -198,7 +203,13 @@ export function TasksScreen() {
           <div className="flex items-center gap-2 text-xs text-[var(--theme-muted)] flex-wrap">
             <span>{stats.total} total</span>
             <span className="hidden sm:inline">·</span>
-            <span className="hidden sm:inline">{stats.inProgress} in progress</span>
+            <span className="hidden sm:inline">{stats.running} running</span>
+            {stats.blocked > 0 && (
+              <>
+                <span className="hidden sm:inline">·</span>
+                <span className="text-red-400">{stats.blocked} blocked</span>
+              </>
+            )}
             {stats.overdue > 0 && (
               <>
                 <span>·</span>

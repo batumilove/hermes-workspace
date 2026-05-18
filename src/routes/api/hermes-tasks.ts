@@ -16,7 +16,9 @@ function isTaskColumn(value: unknown): value is TaskColumn {
     value === 'todo' ||
     value === 'in_progress' ||
     value === 'review' ||
-    value === 'done'
+    value === 'blocked' ||
+    value === 'done' ||
+    value === 'deleted'
   )
 }
 

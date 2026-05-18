@@ -1,0 +1,9 @@
+minimumReleaseAgeExclude:
+  # Security-fix releases intentionally allowed before the 7-day cooldown.
+  - mermaid
+  - '@lobehub/icons'
+  - '@lobehub/icons-static-png'
+  - '@tanstack/react-start'
+  - '@mermaid-js/parser'
+  - brace-expansion
+  - yaml

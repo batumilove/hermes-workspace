@@ -7,8 +7,12 @@ import {
   getMessages,
   listSessions,
   toChatMessage,
-} from '../../server/hermes-api'
-import { resolveSessionKey } from '../../server/session-utils'
+} from '../../server/claude-api'
+import {
+  resolveMainChatSessionId,
+  resolveSessionKey,
+  shouldBindMainToPortableSession,
+} from '../../server/session-utils'
 import { isAuthenticated } from '@/server/auth-middleware'
 import { getLocalSession, getLocalMessages } from '../../server/local-session-store'
 
@@ -20,7 +24,8 @@ export const Route = createFileRoute('/api/history')({
           return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         }
         await ensureGatewayProbed()
-        if (!getGatewayCapabilities().sessions) {
+        const capabilities = getGatewayCapabilities()
+        if (!capabilities.sessions) {
           return json({
             sessionKey: 'new',
             sessionId: 'new',
@@ -39,6 +44,11 @@ export const Route = createFileRoute('/api/history')({
             friendlyId,
             defaultKey: 'main',
           })
+          const pinPortableMain = shouldBindMainToPortableSession({
+            sessionKey,
+            dashboardAvailable: capabilities.dashboard.available,
+            enhancedChat: capabilities.enhancedChat,
+          })
           // Keep /chat/new empty until the first message creates a real session.
           if (sessionKey === 'new') {
             return json({
@@ -47,35 +57,20 @@ export const Route = createFileRoute('/api/history')({
               messages: [],
             })
           }
-          // "main" doesn't exist in Hermes — resolve it to the user's real
-          // active chat session. Prefer the most recently active non-internal
-          // session with messages, and only fall back to a titled session when
-          // there is no better active candidate.
-          if (sessionKey === 'main') {
+          // "main" doesn't exist in Claude — resolve it to the user's real
+          // main chat session. We prefer (in order):
+          //   1. The most recent session with a real human-set title
+          //      (label !== id, e.g. "hows everything"). This is what users
+          //      actually mean by "main".
+          //   2. The most recent non-internal session with messages.
+          // Cron + Operations per-agent sessions are skipped so the
+          // orchestrator chat doesn't latch onto runtime junk.
+          if (sessionKey === 'main' && !pinPortableMain) {
             try {
               const sessions = await listSessions(30, 0)
-              const isInternalKey = (id: string) =>
-                id.startsWith('cron_') ||
-                id.startsWith('cron:') ||
-                id.startsWith('agent:main:ops-')
-              const hasRealTitle = (s: { id: string; title?: string | null }) => {
-                const t = (s.title ?? '').trim()
-                return t.length > 0 && t !== s.id
-              }
-              const active = sessions.find(
-                (s) =>
-                  !isInternalKey(s.id) &&
-                  typeof s.message_count === 'number' &&
-                  s.message_count > 0,
-              )
-              const titled = active
-                ? null
-                : sessions.find(
-                    (s) => !isInternalKey(s.id) && hasRealTitle(s),
-                  )
-              const candidate = active ?? titled
+              const candidate = resolveMainChatSessionId(sessions)
               if (candidate) {
-                sessionKey = candidate.id
+                sessionKey = candidate
               } else {
                 return json({
                   sessionKey: 'new',
@@ -86,6 +81,21 @@ export const Route = createFileRoute('/api/history')({
             } catch {
               return json({ sessionKey: 'new', sessionId: 'new', messages: [] })
             }
+          }
+
+          if (pinPortableMain) {
+            const localMessages = getLocalMessages('main')
+            return json({
+              sessionKey: 'main',
+              sessionId: 'main',
+              messages: localMessages.map((m, index) => ({
+                id: m.id,
+                role: m.role,
+                content: [{ type: 'text', text: m.content }],
+                timestamp: m.timestamp,
+                historyIndex: index,
+              })),
+            })
           }
           let messages: Awaited<ReturnType<typeof getMessages>> = []
           try {

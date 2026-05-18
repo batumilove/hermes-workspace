@@ -1,15 +1,3 @@
-/**
- * Conductor mission spawn — Hermes-backed.
- *
- * Spawns a one-shot Hermes job whose prompt is the orchestrator instructions.
- * The orchestrator session, when it runs, uses the create_task / delegate
- * tools to spawn worker agents. The Conductor UI then polls /api/sessions
- * + /api/history to track workers.
- *
- * Replaces the previous OCPlatform JSON-RPC implementation
- * (gatewayRpc('cron.add', ...)) which only worked when the OCPlatform
- * gateway was running on ws://127.0.0.1:18789.
- */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
@@ -17,14 +5,15 @@ import { createFileRoute } from '@tanstack/react-router'
 import { json } from '@tanstack/react-start'
 import { isAuthenticated } from '../../server/auth-middleware'
 import { requireJsonContentType } from '../../server/rate-limit'
-import {
-  HERMES_API,
-  BEARER_TOKEN,
-  dashboardFetch,
-  ensureGatewayProbed,
-} from '../../server/gateway-capabilities'
+import { dashboardFetch, ensureGatewayProbed } from '../../server/gateway-capabilities'
+import { sanitizeConductorMissionGoal } from '../../server/conductor-mission-sanitize'
+import { getSwarmMission } from '../../server/swarm-missions'
+import { dispatchSwarmAssignments } from './swarm-dispatch'
+import type { SwarmMission } from '../../server/swarm-missions'
 
 let cachedSkill: string | null = null
+
+export const NATIVE_CONDUCTOR_MODE_NOTE = 'Native-swarm is the official Workspace-native Swarm fallback when the dashboard Conductor API is unavailable.'
 
 type ConductorSpawnBody = {
   goal?: unknown
@@ -35,12 +24,9 @@ type ConductorSpawnBody = {
   supervised?: unknown
 }
 
-// Resolve the workspace root from this module's location so we find the
-// bundled skill regardless of where the server is launched from.
 function repoRoot(): string {
   try {
     const here = dirname(fileURLToPath(import.meta.url))
-    // src/routes/api -> repo root (../..)
     return resolve(here, '..', '..', '..')
   } catch {
     return process.cwd()
@@ -49,22 +35,18 @@ function repoRoot(): string {
 
 function loadDispatchSkill(): string {
   if (cachedSkill !== null) return cachedSkill
+  const home = process.env.HOME ?? ''
   const candidates = [
     resolve(repoRoot(), 'skills/workspace-dispatch/SKILL.md'),
     resolve(process.cwd(), 'skills/workspace-dispatch/SKILL.md'),
-    resolve(process.env.HOME ?? '~', '.hermes/skills/workspace-dispatch/SKILL.md'),
-    resolve(
-      process.env.HOME ?? '~',
-      '.ocplatform/workspace/skills/workspace-dispatch/SKILL.md',
-    ),
+    ...(home ? [resolve(home, '.hermes/skills/workspace-dispatch/SKILL.md')] : []),
+    ...(home ? [resolve(home, '.openclaw/workspace/skills/workspace-dispatch/SKILL.md')] : []),
   ]
   for (const p of candidates) {
     try {
       cachedSkill = readFileSync(p, 'utf-8')
       return cachedSkill
-    } catch {
-      continue
-    }
+    } catch {}
   }
   cachedSkill = ''
   return cachedSkill
@@ -91,9 +73,7 @@ function buildOrchestratorPrompt(
   },
 ): string {
   const outputBase = options.projectsDir || '/tmp'
-  const outputPrefix =
-    outputBase === '/tmp' ? '/tmp/dispatch-<slug>' : `${outputBase}/dispatch-<slug>`
-
+  const outputPrefix = outputBase === '/tmp' ? '/tmp/dispatch-<slug>' : `${outputBase}/dispatch-<slug>`
   return [
     'You are a mission orchestrator. Execute this mission autonomously.',
     '',
@@ -104,24 +84,12 @@ function buildOrchestratorPrompt(
     '## Mission',
     '',
     `Goal: ${goal}`,
-    ...(options.orchestratorModel
-      ? ['', `Use model: ${options.orchestratorModel} for the orchestrator`]
-      : []),
-    ...(options.workerModel
-      ? ['', `Use model: ${options.workerModel} for all workers`]
-      : []),
+    ...(options.orchestratorModel ? ['', `Use model: ${options.orchestratorModel} for the orchestrator`] : []),
+    ...(options.workerModel ? ['', `Use model: ${options.workerModel} for all workers`] : []),
     ...(options.maxParallel > 1
-      ? [
-          '',
-          `Run up to ${options.maxParallel} workers in parallel when tasks are independent`,
-        ]
-      : [
-          '',
-          'Spawn workers one at a time. Do NOT wait for workers to finish — the UI handles tracking.',
-        ]),
-    ...(options.supervised
-      ? ['', 'Supervised mode is enabled. Require approval before each task.']
-      : []),
+      ? ['', `Run up to ${options.maxParallel} workers in parallel when tasks are independent`]
+      : ['', 'Spawn workers one at a time. Do NOT wait for workers to finish — the UI handles tracking.']),
+    ...(options.supervised ? ['', 'Supervised mode is enabled. Require approval before each task.'] : []),
     '',
     '## Critical Rules',
     '- Use create_task / delegate_task to create worker agents for each task',
@@ -136,125 +104,325 @@ function buildOrchestratorPrompt(
   ].join('\n')
 }
 
-function authHeaders(): Record<string, string> {
-  return BEARER_TOKEN ? { Authorization: `Bearer ${BEARER_TOKEN}` } : {}
-}
-
-function nowPlusSecondsIso(seconds: number): string {
-  const t = new Date(Date.now() + seconds * 1000)
-  // Hermes accepts ISO-8601 timestamps; strip milliseconds for cleanliness
-  return t.toISOString().replace(/\.\d{3}Z$/, 'Z')
-}
-
-async function createHermesJob(payload: {
-  name: string
-  schedule: string
-  prompt: string
-  deliver?: string
-}): Promise<{ id?: string; name?: string; error?: string }> {
-  const body = JSON.stringify({
-    name: payload.name,
-    schedule: payload.schedule,
-    prompt: payload.prompt,
-    deliver: payload.deliver ?? 'local',
+async function createDashboardConductorMission(payload: { name: string; prompt: string }): Promise<{
+  id?: string
+  name?: string
+  sessionKey?: string
+  error?: string
+}> {
+  const res = await dashboardFetch('/api/conductor/missions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: payload.name, prompt: payload.prompt }),
   })
-  const capabilities = await ensureGatewayProbed()
-  const res = capabilities.dashboard.available
-    ? await dashboardFetch('/api/cron/jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      })
-    : await fetch(`${HERMES_API}/api/jobs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body,
-      })
   const text = await res.text()
-  let data: { job?: { id?: string; name?: string }; error?: string } = {}
+  let data: { id?: string; name?: string; session_id?: string; error?: string; detail?: string } = {}
   try {
     data = JSON.parse(text)
   } catch {
     return { error: text || `HTTP ${res.status}` }
   }
-  if (!res.ok || data.error) {
-    return { error: data.error || `HTTP ${res.status}` }
+  if (!res.ok || data.error || data.detail) {
+    return { error: data.error || data.detail || `HTTP ${res.status}` }
   }
-  return { id: data.job?.id, name: data.job?.name }
+  return { id: data.id, name: data.name, sessionKey: data.session_id }
+}
+
+type NativeConductorAssignment = {
+  workerId: string
+  task: string
+  rationale: string
+  reviewRequired?: boolean
+  direct?: boolean
+  raw?: boolean
+}
+
+function clipText(value: string, max = 8000): string {
+  return value.length <= max ? value : `${value.slice(0, max - 20)}\n...[truncated]`
+}
+
+export function buildNativeConductorAssignments(goal: string, options: { maxParallel: number; supervised: boolean }): Array<NativeConductorAssignment> {
+  const maxParallel = Math.min(5, Math.max(1, options.maxParallel || 1))
+  const normalizedGoal = goal.toLowerCase()
+  const wantsProduction = /production|ready|harden|audit|clean|fix|bug|test|build|release|deploy|operational/.test(normalizedGoal)
+  const wantsDocs = /doc|handoff|readme|spec|plan|summary/.test(normalizedGoal)
+  const assignments: Array<NativeConductorAssignment> = []
+
+  assignments.push({
+    workerId: wantsProduction ? 'swarm2' : 'swarm5',
+    rationale: wantsProduction ? 'Foundation owns runtime contracts and production blockers.' : 'Builder owns the primary implementation lane.',
+    reviewRequired: false,
+    direct: true,
+    task: [
+      `Conductor mission: ${goal}`,
+      '',
+      'Lane: Foundation / primary implementation.',
+      'Find the smallest safe execution plan, make concrete progress, and produce a checkpoint. If code changes are required, keep them scoped and testable.',
+      options.supervised ? 'Supervised mode: stop before destructive writes or commits and report the exact approval needed.' : 'Do not ask for confirmation unless blocked; start immediately.',
+    ].join('\n'),
+  })
+
+  if (maxParallel >= 2) {
+    assignments.push({
+      workerId: 'swarm5',
+      rationale: 'Builder executes implementation or patch work in parallel with foundation analysis.',
+      reviewRequired: false,
+      direct: true,
+      task: [
+        `Conductor mission: ${goal}`,
+        '',
+        'Lane: Builder.',
+        'Implement or prototype the concrete fix/feature path. Avoid broad refactors. Report files changed, tests run, and remaining risks.',
+        options.supervised ? 'Supervised mode: prepare patches but stop before destructive writes or commits if approval is needed.' : 'Proceed without asking unless blocked.',
+      ].join('\n'),
+    })
+  }
+
+  if (maxParallel >= 3) {
+    assignments.push({
+      workerId: 'swarm6',
+      rationale: 'Reviewer independently checks correctness, regressions, and merge risk.',
+      reviewRequired: false,
+      direct: true,
+      task: [
+        `Conductor mission: ${goal}`,
+        '',
+        'Lane: Reviewer / merge gate.',
+        'Review the implementation plan and any changes from Foundation/Builder. Look for regressions, missing tests, unsafe assumptions, and production-readiness gaps. Do not make broad edits unless needed to unblock correctness.',
+      ].join('\n'),
+    })
+  }
+
+  if (maxParallel >= 4) {
+    assignments.push({
+      workerId: 'swarm11',
+      rationale: 'QA validates behavior with targeted tests and smoke checks.',
+      reviewRequired: false,
+      direct: true,
+      task: [
+        `Conductor mission: ${goal}`,
+        '',
+        'Lane: QA.',
+        'Run or design focused verification. Prefer targeted tests/build/smoke checks. Report exact commands and results. If tests are missing, identify the minimal regression coverage needed.',
+      ].join('\n'),
+    })
+  }
+
+  if (maxParallel >= 5 || wantsDocs) {
+    assignments.push({
+      workerId: 'swarm7',
+      rationale: 'Scribe captures handoff, docs, and operational notes.',
+      reviewRequired: false,
+      direct: true,
+      task: [
+        `Conductor mission: ${goal}`,
+        '',
+        'Lane: Scribe.',
+        'Create a concise handoff/status note: what changed, how to operate it, verification, caveats, and next actions. Do not expose secrets.',
+      ].join('\n'),
+    })
+  }
+
+  const selected = assignments.slice(0, maxParallel)
+  if (wantsDocs && !selected.some((assignment) => assignment.workerId === 'swarm7')) {
+    selected[selected.length - 1] = {
+      workerId: 'swarm7',
+      rationale: 'Scribe captures handoff, docs, and operational notes.',
+      reviewRequired: false,
+      direct: true,
+      task: [
+        `Conductor mission: ${goal}`,
+        '',
+        'Lane: Scribe.',
+        'Create a concise handoff/status note: what changed, how to operate it, verification, caveats, and next actions. Do not expose secrets.',
+        options.supervised ? 'Supervised mode: stop before destructive writes or commits and report the exact approval needed.' : 'Proceed without asking unless blocked.',
+      ].join('\n'),
+    }
+  }
+
+  return selected
+}
+
+function swarmMissionStatus(mission: SwarmMission): string {
+  if (mission.state === 'cancelled') return 'cancelled'
+  if (mission.state === 'complete') return 'completed'
+  if (mission.state === 'blocked') return 'failed'
+  return 'running'
+}
+
+function nativeMissionLines(mission: SwarmMission, maxLines: number): Array<string> {
+  const lines = [
+    `Native Workspace Swarm mission: ${mission.title}`,
+    `mission_id: ${mission.id}`,
+    `state: ${mission.state}`,
+    ...mission.assignments.map((assignment) => {
+      const result = assignment.checkpoint?.result ? ` — ${assignment.checkpoint.result}` : ''
+      const blocker = assignment.checkpoint?.blocker ? ` — blocker: ${assignment.checkpoint.blocker}` : ''
+      return `${assignment.workerId} ${assignment.state}: ${assignment.task.slice(0, 160)}${result}${blocker}`
+    }),
+    ...mission.events.slice(-20).map((event) => `${new Date(event.at).toISOString()} ${event.type}: ${event.message}`),
+  ]
+  return lines.slice(-maxLines)
+}
+
+export function toNativeConductorMissionRecord(mission: SwarmMission, maxLines = 400) {
+  return {
+    id: mission.id,
+    name: mission.title,
+    status: swarmMissionStatus(mission),
+    error: mission.state === 'blocked' ? 'Native Workspace Swarm mission blocked' : null,
+    session_id: null,
+    lines: nativeMissionLines(mission, maxLines),
+    exit_code: mission.state === 'blocked' || mission.state === 'cancelled' ? 1 : mission.state === 'complete' ? 0 : null,
+    nativeSwarm: true,
+    modeOfficialOotb: true,
+    modeNote: NATIVE_CONDUCTOR_MODE_NOTE,
+    assignments: mission.assignments,
+    updatedAt: mission.updatedAt,
+  }
+}
+
+function createNativeConductorMission(input: {
+  goal: string
+  missionName: string
+  maxParallel: number
+  supervised: boolean
+}) {
+  const assignments = buildNativeConductorAssignments(input.goal, {
+    maxParallel: input.maxParallel,
+    supervised: input.supervised,
+  })
+  const missionTitle = `Conductor: ${clipText(input.goal, 120)}`
+  void dispatchSwarmAssignments({
+    assignments,
+    missionId: input.missionName,
+    missionTitle,
+    allowAsync: true,
+    waitForCheckpoint: false,
+    timeoutSeconds: 600,
+    checkpointPollSeconds: 10,
+    notifySessionKey: 'main',
+  }).catch((error) => {
+    console.error('[conductor] native swarm dispatch failed:', error instanceof Error ? error.message : String(error))
+  })
+  return { missionId: input.missionName, missionTitle, assignments }
 }
 
 export const Route = createFileRoute('/api/conductor-spawn')({
   server: {
     handlers: {
-      POST: async ({ request }) => {
-        if (!isAuthenticated(request)) {
-          return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+      GET: async ({ request }) => {
+        if (!isAuthenticated(request)) return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+        const url = new URL(request.url)
+        const missionId = url.searchParams.get('missionId')?.trim()
+        const requestedLines = Number(url.searchParams.get('lines') || '200')
+        const lines = Number.isFinite(requestedLines) ? Math.min(2000, Math.max(1, requestedLines)) : 200
+        if (!missionId) return json({ ok: false, error: 'missionId required' }, { status: 400 })
+
+        const nativeMission = getSwarmMission(missionId)
+        if (nativeMission) {
+          return json({ ok: true, mode: 'native-swarm', mission: toNativeConductorMissionRecord(nativeMission, lines) })
         }
+
+        const capabilities = await ensureGatewayProbed()
+        if (!capabilities.dashboard.available || !capabilities.conductor) {
+          return json({ ok: false, error: 'Conductor mission not found in native swarm store and dashboard Conductor API is unavailable' }, { status: 404 })
+        }
+
+        const res = await dashboardFetch(`/api/conductor/missions/${encodeURIComponent(missionId)}?lines=${lines}`)
+        const text = await res.text()
+        let mission: Record<string, unknown> = {}
+        try {
+          mission = JSON.parse(text) as Record<string, unknown>
+        } catch {
+          return json({ ok: false, error: text || `HTTP ${res.status}` }, { status: res.ok ? 502 : res.status })
+        }
+        if (!res.ok) {
+          const error = typeof mission.detail === 'string' ? mission.detail : typeof mission.error === 'string' ? mission.error : `HTTP ${res.status}`
+          return json({ ok: false, error }, { status: res.status })
+        }
+        return json({ ok: true, mission })
+      },
+      POST: async ({ request }) => {
+        if (!isAuthenticated(request)) return json({ ok: false, error: 'Unauthorized' }, { status: 401 })
         const csrfCheck = requireJsonContentType(request)
         if (csrfCheck) return csrfCheck
 
         try {
-          const body = (await request
-            .json()
-            .catch(() => ({}))) as ConductorSpawnBody
-          const goal = readOptionalString(body.goal)
+          const body = (await request.json().catch(() => ({}))) as ConductorSpawnBody
+          const rawGoal = readOptionalString(body.goal)
+          const goalSanitization = sanitizeConductorMissionGoal(rawGoal)
+          const goal = goalSanitization.goal
           const orchestratorModel = readOptionalString(body.orchestratorModel)
           const workerModel = readOptionalString(body.workerModel)
           const projectsDir = readOptionalString(body.projectsDir)
           const maxParallel = readMaxParallel(body.maxParallel)
           const supervised = body.supervised === true
-
           if (!goal) {
-            return json({ ok: false, error: 'goal required' }, { status: 400 })
+            return json(
+              {
+                ok: false,
+                error: goalSanitization.removedCloudflareErrorPage
+                  ? 'mission goal only contained a Cloudflare 5xx HTML error page; enter the original mission goal and retry'
+                  : 'goal required',
+                warnings: goalSanitization.warnings,
+              },
+              { status: 400 },
+            )
           }
 
-          const skill = loadDispatchSkill()
-          const prompt = buildOrchestratorPrompt(goal, skill, {
+          const prompt = buildOrchestratorPrompt(goal, loadDispatchSkill(), {
             orchestratorModel,
             workerModel,
             projectsDir,
             maxParallel,
             supervised,
           })
+          const missionName = `conductor-${Date.now()}`
+          const capabilities = await ensureGatewayProbed()
 
-          const jobName = `conductor-${Date.now()}`
-          // Schedule a one-shot job ~5s in the future so the cron loop
-          // picks it up promptly without racing with the create response.
-          const result = await createHermesJob({
-            name: jobName,
-            schedule: nowPlusSecondsIso(5),
-            prompt,
-            deliver: 'local',
-          })
-
-          if (result.error) {
-            return json(
-              { ok: false, error: result.error },
-              { status: 502 },
-            )
+          if (!capabilities.dashboard.available || !capabilities.conductor) {
+            const native = createNativeConductorMission({
+              goal,
+              missionName,
+              maxParallel,
+              supervised,
+            })
+            return json({
+              ok: true,
+              mode: 'native-swarm',
+              modeOfficialOotb: true,
+              modeNote: NATIVE_CONDUCTOR_MODE_NOTE,
+              prompt: null,
+              missionId: native.missionId,
+              sessionKey: null,
+              sessionKeyPrefix: null,
+              jobId: native.missionId,
+              jobName: native.missionTitle,
+              runId: null,
+              warnings: goalSanitization.warnings,
+              assignments: native.assignments,
+              results: null,
+            })
           }
 
-          // Hermes runs cron jobs in sessions keyed `cron_<jobId>_<timestamp>`.
-          // We can't know the timestamp until the cron loop fires, so we return
-          // a prefix and the UI polls for any session whose key starts with it.
-          const jobId = result.id ?? jobName
+          const result = await createDashboardConductorMission({ name: missionName, prompt })
+          if (result.error) return json({ ok: false, error: result.error }, { status: 502 })
+          const missionId = result.id ?? missionName
           return json({
             ok: true,
-            sessionKey: `cron_${jobId}_pending`,
-            sessionKeyPrefix: `cron_${jobId}_`,
-            jobId,
-            jobName: result.name ?? jobName,
+            mode: 'dashboard',
+            prompt: null,
+            missionId,
+            sessionKey: result.sessionKey ?? null,
+            sessionKeyPrefix: (result as Record<string, unknown>).sessionKeyPrefix ?? null,
+            jobId: missionId,
+            jobName: result.name ?? missionName,
             runId: null,
+            warnings: goalSanitization.warnings,
           })
         } catch (error) {
-          return json(
-            {
-              ok: false,
-              error:
-                error instanceof Error ? error.message : String(error),
-            },
-            { status: 500 },
-          )
+          return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 500 })
         }
       },
     },

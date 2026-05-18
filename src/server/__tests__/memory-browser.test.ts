@@ -28,6 +28,7 @@ vi.mock('node:os', () => ({
 beforeEach(() => {
   vi.clearAllMocks()
   delete process.env.HERMES_HOME
+  delete process.env.CLAUDE_HOME
 })
 
 async function loadMod() {
@@ -44,7 +45,6 @@ describe('memory-browser', () => {
   })
 
   it('falls back to ~/.hermes when HERMES_HOME is not set', async () => {
-    delete process.env.HERMES_HOME
     const mod = await loadMod()
     const root = mod.getMemoryWorkspaceRoot()
     expect(root).toBe(path.resolve('/home/testuser/.hermes'))

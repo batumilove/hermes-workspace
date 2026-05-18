@@ -4,21 +4,25 @@ import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
   BrainIcon,
+  Building01Icon,
+  Castle02Icon,
   Chat01Icon,
   CheckListIcon,
   Clock01Icon,
   ComputerTerminal01Icon,
   DashboardSquare01Icon,
   File01Icon,
+  McpServerIcon,
   MessageMultiple01Icon,
   Moon02Icon,
   PencilEdit02Icon,
-  PinIcon,
-  PinOffIcon,
   PuzzleIcon,
-
   Rocket01Icon,
-  Search01Icon, Settings01Icon, Sun02Icon, UserGroupIcon, UserMultipleIcon
+  Search01Icon,
+  Settings01Icon,
+  Sun02Icon,
+  UserGroupIcon,
+  UserMultipleIcon,
 } from '@hugeicons/core-free-icons'
 import { AnimatePresence, motion } from 'motion/react'
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
@@ -67,29 +71,34 @@ function ThemeToggleMini() {
   const updateSettings = useSettingsStore((state) => state.updateSettings)
   void _theme
   // Detect dark/light from actual data-theme attribute
-  const currentDataTheme = typeof document !== 'undefined'
-    ? document.documentElement.getAttribute('data-theme') || 'hermes-nous'
-    : 'hermes-nous'
+  const currentDataTheme =
+    typeof document !== 'undefined'
+      ? document.documentElement.getAttribute('data-theme') || 'claude-nous'
+      : 'claude-nous'
   const isDark = !currentDataTheme.endsWith('-light')
 
   // Map between dark and light counterparts — must include all theme families
   const LIGHT_DARK_PAIRS: Record<string, string> = {
-    'hermes-nous': 'hermes-nous-light',
-    'hermes-nous-light': 'hermes-nous',
-    'hermes-official': 'hermes-official-light',
-    'hermes-official-light': 'hermes-official',
-    'hermes-classic': 'hermes-classic-light',
-    'hermes-classic-light': 'hermes-classic',
-    'hermes-slate': 'hermes-slate-light',
-    'hermes-slate-light': 'hermes-slate',
+    'claude-nous': 'claude-nous-light',
+    'claude-nous-light': 'claude-nous',
+    'claude-official': 'claude-official-light',
+    'claude-official-light': 'claude-official',
+    'claude-classic': 'claude-classic-light',
+    'claude-classic-light': 'claude-classic',
+    'claude-slate': 'claude-slate-light',
+    'claude-slate-light': 'claude-slate',
   }
 
   return (
     <button
       type="button"
       onClick={() => {
-        // Fall back to current family rather than dropping the user into hermes-official
-        const nextDataTheme = LIGHT_DARK_PAIRS[currentDataTheme] || (isDark ? `${currentDataTheme}-light` : currentDataTheme.replace(/-light$/, ''))
+        // Fall back to current family rather than dropping the user into claude-official
+        const nextDataTheme =
+          LIGHT_DARK_PAIRS[currentDataTheme] ||
+          (isDark
+            ? `${currentDataTheme}-light`
+            : currentDataTheme.replace(/-light$/, ''))
         // Import and call setTheme to persist and apply
         import('@/lib/theme').then(({ setTheme }) => {
           setTheme(nextDataTheme as any)
@@ -103,7 +112,11 @@ function ThemeToggleMini() {
       style={{ color: 'var(--theme-muted)' }}
       aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
     >
-      <HugeiconsIcon icon={isDark ? Sun02Icon : Moon02Icon} size={16} strokeWidth={1.5} />
+      <HugeiconsIcon
+        icon={isDark ? Sun02Icon : Moon02Icon}
+        size={16}
+        strokeWidth={1.5}
+      />
     </button>
   )
 }
@@ -114,9 +127,7 @@ type ChatSidebarProps = {
   creatingSession: boolean
   onCreateSession: () => void
   isCollapsed: boolean
-  isPinned: boolean
   onToggleCollapse: () => void
-  onTogglePinned: () => void
   onSelectSession?: () => void
   onActiveSessionDelete?: () => void
   sessionsLoading: boolean
@@ -130,6 +141,8 @@ type ChatSidebarProps = {
 type NavItemDef = {
   kind: 'link' | 'button'
   to?: string
+  search?: Record<string, unknown>
+  hash?: string
   icon: unknown
   label: string
   active: boolean
@@ -149,7 +162,7 @@ export async function fetchWorkspaceStats(): Promise<WorkspaceStats | null> {
   }
 }
 
-export function fetchWorkspaceProjectShortcuts(): Array<never> {
+export async function fetchWorkspaceProjectShortcuts(): Promise<Array<never>> {
   return []
 }
 
@@ -203,9 +216,23 @@ function NavItem({
           transition={transition}
           className="flex min-w-0 items-center gap-2"
         >
-          <span className="overflow-hidden whitespace-nowrap">{item.label}</span>
+          <span className="overflow-hidden whitespace-nowrap">
+            {item.label}
+          </span>
           {item.badge && item.badge !== 'error-dot' ? (
-            <span className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full border border-primary-700 bg-primary-900 px-2 py-0.5 text-[10px] font-semibold leading-none text-primary-300">
+            <span
+              className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-bold leading-none"
+              style={
+                item.badge === 'NEW'
+                  ? {
+                      background: 'linear-gradient(180deg, #fde68a 0%, #fbbf24 50%, #d4a017 100%)',
+                      color: '#0b1320',
+                      boxShadow: '0 0 8px rgba(250,204,21,0.4)',
+                      letterSpacing: '0.08em',
+                    }
+                  : undefined
+              }
+            >
               {item.badge}
             </span>
           ) : null}
@@ -227,6 +254,8 @@ function NavItem({
               render={
                 <Link
                   to={item.to}
+                  search={item.search}
+                  hash={item.hash}
                   onClick={handleSelect}
                   className={cls}
                   data-tour={item.dataTour}
@@ -243,6 +272,8 @@ function NavItem({
     return (
       <Link
         to={item.to}
+        search={item.search}
+        hash={item.hash}
         onClick={handleSelect}
         className={cls}
         data-tour={item.dataTour}
@@ -300,7 +331,7 @@ function NavItem({
 
 // ── Last-visited route tracking ─────────────────────────────────────────
 
-const LAST_ROUTE_KEY = 'hermes-sidebar-last-route'
+const LAST_ROUTE_KEY = 'claude-sidebar-last-route'
 
 function getLastRoute(section: string): string | null {
   try {
@@ -489,9 +520,7 @@ function ChatSidebarComponent({
   sessions,
   activeFriendlyId,
   isCollapsed,
-  isPinned,
   onToggleCollapse,
-  onTogglePinned,
   onSelectSession,
   onActiveSessionDelete,
   sessionsLoading,
@@ -499,12 +528,8 @@ function ChatSidebarComponent({
   sessionsError,
   onRetrySessions,
 }: ChatSidebarProps) {
-  const {
-    settingsOpen,
-    settingsSection,
-    setSettingsOpen,
-    handleOpenSettings,
-  } = useSidebarSettings()
+  const { settingsOpen, settingsSection, setSettingsOpen, handleOpenSettings } =
+    useSidebarSettings()
   const profileDisplayName = useChatSettingsStore(selectChatProfileDisplayName)
   const profileAvatarDataUrl = useChatSettingsStore(
     selectChatProfileAvatarDataUrl,
@@ -521,11 +546,8 @@ function ChatSidebarComponent({
 
   useEffect(() => {
     function handleOpenSettingsEvent(event: Event) {
-      const detail = (event as CustomEvent<ChatOpenSettingsDetail | undefined>)
-        .detail
-      handleOpenSettings(
-        detail?.section === 'appearance' ? 'appearance' : 'hermes',
-      )
+      const detail = (event as CustomEvent<ChatOpenSettingsDetail>).detail
+      handleOpenSettings(detail.section === 'appearance' ? 'appearance' : 'claude')
     }
 
     window.addEventListener(CHAT_OPEN_SETTINGS_EVENT, handleOpenSettingsEvent)
@@ -554,13 +576,17 @@ function ChatSidebarComponent({
     pathname === '/new' || pathname.startsWith('/chat/new')
   const _isSettingsActive = pathname === '/settings'
   const isSkillsActive = pathname === '/skills'
+  const isMcpActive = pathname === '/mcp'
   const isFilesActive = pathname === '/files'
+  const isPlaygroundActive = pathname === '/playground'
+  const isAgoraActive = pathname === '/agora'
   const isTerminalActive = pathname === '/terminal'
   const isJobsActive = pathname === '/jobs'
   const isMemoryActive = pathname === '/memory'
   const isTasksActive = pathname === '/tasks'
   const isConductorActive = pathname === '/conductor'
   const isOperationsActive = pathname === '/operations'
+  const isSwarmActive = pathname === '/swarm' || pathname === '/swarm2'
   const mainRoutes = ['/chat', '/new', '/files', '/terminal']
   const knowledgeRoutes = ['/memory', '/skills']
   const systemRoutes = ['/settings', '/logs']
@@ -582,15 +608,15 @@ function ChatSidebarComponent({
 
   // Collapsible section states
   const [mainExpanded, toggleMain] = usePersistedBool(
-    'hermes-sidebar-main-expanded',
+    'claude-sidebar-main-expanded',
     true,
   )
   const [knowledgeExpanded, toggleKnowledge] = usePersistedBool(
-    'hermes-sidebar-knowledge-expanded',
+    'claude-sidebar-knowledge-expanded',
     true,
   )
   const [_systemExpanded, _toggleSystem] = usePersistedBool(
-    'hermes-sidebar-system-expanded',
+    'claude-sidebar-system-expanded',
     false,
   )
 
@@ -769,6 +795,7 @@ function ChatSidebarComponent({
       label: t('nav.chat'),
       active: isChatActive,
     },
+
     {
       kind: 'link',
       to: '/files',
@@ -794,7 +821,7 @@ function ChatSidebarComponent({
       kind: 'link',
       to: '/tasks',
       icon: CheckListIcon,
-      label: t('nav.tasks'),
+      label: 'Tasks',
       active: isTasksActive,
     },
     {
@@ -807,10 +834,18 @@ function ChatSidebarComponent({
     {
       kind: 'link',
       to: '/operations',
-      icon: UserGroupIcon,
+      icon: UserMultipleIcon,
       label: 'Operations',
       active: isOperationsActive,
     },
+    {
+      kind: 'link',
+      to: '/swarm',
+      icon: UserGroupIcon,
+      label: 'Swarm',
+      active: isSwarmActive,
+    },
+
   ]
 
   const knowledgeItems: Array<NavItemDef> = [
@@ -831,6 +866,13 @@ function ChatSidebarComponent({
     },
     {
       kind: 'link',
+      to: '/mcp',
+      icon: McpServerIcon,
+      label: 'MCP',
+      active: isMcpActive,
+    },
+    {
+      kind: 'link',
       to: '/profiles',
       icon: UserMultipleIcon,
       label: t('nav.profiles'),
@@ -847,10 +889,19 @@ function ChatSidebarComponent({
       }}
       initial={false}
       animate={{
-        width: isVisuallyCollapsed ? (isMobile ? 0 : 48) : isMobile ? '85vw' : 300,
+        width: isVisuallyCollapsed
+          ? isMobile
+            ? 0
+            : 48
+          : isMobile
+            ? '85vw'
+            : 300,
       }}
       transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-      className={cn(asideProps.className, isMobile && isCollapsed && 'pointer-events-none overflow-hidden')}
+      className={cn(
+        asideProps.className,
+        isMobile && isCollapsed && 'pointer-events-none overflow-hidden',
+      )}
       data-tour="sidebar-container"
       style={isMobile ? { maxWidth: 360 } : undefined}
       onMouseEnter={() => {
@@ -882,46 +933,25 @@ function ChatSidebarComponent({
                 to="/chat"
                 className={cn(
                   buttonVariants({ variant: 'ghost', size: 'sm' }),
-                  'w-full pl-1.5 pr-20 justify-start gap-2',
+                  'w-full pl-1.5 justify-start gap-2',
                 )}
               >
-                <img src="/hermes-avatar.webp" alt="Hermes" className="size-6 rounded-lg" />
-                <span className="text-sm font-semibold tracking-tight" style={{ color: 'var(--theme-text)' }}>Hermes Workspace</span>
+                <img
+                  src="/claude-avatar.webp"
+                  alt="Hermes Agent"
+                  className="size-6 rounded-lg"
+                />
+                <span
+                  className="text-sm font-semibold tracking-tight"
+                  style={{ color: 'var(--theme-text)' }}
+                >
+                  Hermes Workspace
+                </span>
               </Link>
             </motion.div>
           ) : null}
         </AnimatePresence>
         <TooltipProvider>
-          {!isVisuallyCollapsed ? (
-            <TooltipRoot>
-              <TooltipTrigger
-                onClick={onTogglePinned}
-                render={
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    aria-label={isPinned ? 'Unpin Sidebar' : 'Pin Sidebar'}
-                    aria-pressed={isPinned}
-                    className={cn(
-                      'absolute right-9 top-1/2 shrink-0 -translate-y-1/2 opacity-80 hover:opacity-100',
-                      isPinned &&
-                        'bg-[var(--theme-accent)]/10 text-[var(--theme-accent)] opacity-100',
-                    )}
-                    data-tour="sidebar-pin-toggle"
-                  >
-                    <HugeiconsIcon
-                      icon={isPinned ? PinOffIcon : PinIcon}
-                      size={18}
-                      strokeWidth={1.75}
-                    />
-                  </Button>
-                }
-              />
-              <TooltipContent side="right">
-                {isPinned ? 'Unpin Sidebar' : 'Pin Sidebar'}
-              </TooltipContent>
-            </TooltipRoot>
-          ) : null}
           <TooltipRoot>
             <TooltipTrigger
               onClick={handleSidebarToggle}
@@ -929,7 +959,9 @@ function ChatSidebarComponent({
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  aria-label={isVisuallyCollapsed ? 'Open Sidebar' : 'Close Sidebar'}
+                  aria-label={
+                    isVisuallyCollapsed ? 'Open Sidebar' : 'Close Sidebar'
+                  }
                   className="absolute right-2 top-1/2 shrink-0 -translate-y-1/2 opacity-80 hover:opacity-100"
                   data-tour="sidebar-collapse-toggle"
                 >
@@ -1000,6 +1032,46 @@ function ChatSidebarComponent({
         </div>
       )}
 
+      {/* ── HermesWorld featured link (gold castle, NEW badge) ────── */}
+      {/* Hide when VITE_HERMESWORLD_ENABLED is explicitly '0' */}
+      {!isVisuallyCollapsed &&
+        (import.meta as any).env?.VITE_HERMESWORLD_ENABLED !== '0' && (
+        <div className="px-2 pb-2">
+          <Link
+            to="/playground"
+            onClick={() => onSelectSession?.()}
+            className={cn(
+              buttonVariants({ variant: 'ghost', size: 'sm' }),
+              'group w-full justify-start gap-2.5 px-3 py-2 text-primary-900 hover:bg-primary-200 dark:hover:bg-primary-800',
+              isPlaygroundActive &&
+                'bg-accent-500/10 text-accent-500 hover:bg-accent-50 dark:hover:bg-accent-900/300/15',
+            )}
+            data-tour="hermesworld"
+          >
+            <HugeiconsIcon
+              icon={Castle02Icon}
+              size={20}
+              strokeWidth={1.5}
+              className="size-5 shrink-0"
+              style={{ color: '#facc15' }}
+            />
+            <span>HermesWorld</span>
+            <span
+              className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[10px] font-bold leading-none"
+              style={{
+                background:
+                  'linear-gradient(180deg, #fde68a 0%, #fbbf24 50%, #d4a017 100%)',
+                color: '#0b1320',
+                boxShadow: '0 0 8px rgba(250,204,21,0.4)',
+                letterSpacing: '0.08em',
+              }}
+            >
+              NEW
+            </span>
+          </Link>
+        </div>
+      )}
+
       {/* ── Scrollable body: nav + sessions ─────────────────────────── */}
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin flex flex-col">
         {/* Navigation sections */}
@@ -1049,12 +1121,7 @@ function ChatSidebarComponent({
         </div>
 
         {/* Sessions list */}
-        <div
-          className={cn(
-            'shrink-0 mt-1',
-            isMobile && 'order-1',
-          )}
-        >
+        <div className={cn('shrink-0 mt-1', isMobile && 'order-1')}>
           <AnimatePresence initial={false}>
             {!isVisuallyCollapsed && (
               <motion.div
@@ -1088,10 +1155,12 @@ function ChatSidebarComponent({
       {/* ── Footer with User Menu ─────────────────────────────────── */}
       <div className="px-2 py-2.5 border-t shrink-0 theme-border theme-panel">
         {/* User card + actions */}
-        <div className={cn(
-          'flex items-center rounded-lg transition-colors',
-          isVisuallyCollapsed ? 'flex-col gap-2 py-2' : 'gap-2.5 px-2 py-1.5',
-        )}>
+        <div
+          className={cn(
+            'flex items-center rounded-lg transition-colors',
+            isVisuallyCollapsed ? 'flex-col gap-2 py-2' : 'gap-2.5 px-2 py-1.5',
+          )}
+        >
           {/* User menu trigger */}
           <MenuRoot>
             <MenuTrigger
@@ -1126,7 +1195,7 @@ function ChatSidebarComponent({
             <MenuContent side="top" align="start" className="min-w-[200px]">
               <MenuItem
                 onClick={function onOpenSettings() {
-                  handleOpenSettings('hermes')
+                  handleOpenSettings('claude')
                 }}
                 className="justify-between"
               >
@@ -1147,11 +1216,15 @@ function ChatSidebarComponent({
             <div className="flex items-center gap-0.5">
               <button
                 type="button"
-                onClick={() => handleOpenSettings('hermes')}
+                onClick={() => handleOpenSettings('claude')}
                 className="shrink-0 rounded-lg p-1.5 text-primary-400 hover:bg-primary-200 dark:hover:bg-neutral-800 hover:text-primary-600 dark:hover:text-neutral-300 transition-colors"
                 aria-label="Settings"
               >
-                <HugeiconsIcon icon={Settings01Icon} size={16} strokeWidth={1.5} />
+                <HugeiconsIcon
+                  icon={Settings01Icon}
+                  size={16}
+                  strokeWidth={1.5}
+                />
               </button>
               <ThemeToggleMini />
             </div>
@@ -1228,7 +1301,6 @@ function areSidebarPropsEqual(
   if (prevProps.activeFriendlyId !== nextProps.activeFriendlyId) return false
   if (prevProps.creatingSession !== nextProps.creatingSession) return false
   if (prevProps.isCollapsed !== nextProps.isCollapsed) return false
-  if (prevProps.isPinned !== nextProps.isPinned) return false
   if (prevProps.sessionsLoading !== nextProps.sessionsLoading) return false
   if (prevProps.sessionsFetching !== nextProps.sessionsFetching) return false
   if (prevProps.sessionsError !== nextProps.sessionsError) return false

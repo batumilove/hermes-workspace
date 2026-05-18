@@ -1,50 +1,37 @@
 //  @ts-check
 
 import { tanstackConfig } from '@tanstack/eslint-config'
-import reactHooks from 'eslint-plugin-react-hooks'
 
 export default [
-  {
-    linterOptions: {
-      reportUnusedDisableDirectives: false,
-    },
-  },
-  {
-    ignores: [
-      'dist/**',
-      'node_modules/**',
-      'public/**/*.js',
-      'scripts/**/*.js',
-      'server-entry.js',
-      'eslint.config.js',
-      'prettier.config.js',
-      'vite.config.ts',
-    ],
-  },
   ...tanstackConfig,
   {
-    plugins: {
-      'react-hooks': reactHooks,
-    },
+    ignores: ['eslint.config.js', 'prettier.config.js', 'vite.config.ts'],
+  },
+  {
+    // Block client-side imports of server-only MCP input types.
+    // `src/types/mcp-input.ts` may carry secret-bearing fields and must
+    // never be referenced from screens or shared components.
+    files: ['src/screens/**/*.{ts,tsx}', 'src/components/**/*.{ts,tsx}'],
     rules: {
-      '@typescript-eslint/array-type': 'off',
-      '@typescript-eslint/consistent-type-imports': 'off',
-      '@typescript-eslint/consistent-type-specifier-style': 'off',
-      '@typescript-eslint/no-unnecessary-condition': 'off',
-      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
-      '@typescript-eslint/require-await': 'off',
-      'import/consistent-type-specifier-style': 'off',
-      'import/first': 'off',
-      'import/newline-after-import': 'off',
-      'import/order': 'off',
-      'no-constant-condition': 'off',
-      'no-control-regex': 'off',
-      'no-duplicate-case': 'off',
-      'no-irregular-whitespace': 'off',
-      'no-useless-escape': 'off',
-      'prefer-const': 'off',
-      'react-hooks/exhaustive-deps': 'off',
-      'sort-imports': 'off',
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@/types/mcp-input',
+              message:
+                'mcp-input.ts is server-only (carries unmasked secrets). Import McpClientInput from @/types/mcp instead.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['**/types/mcp-input', '**/types/mcp-input.ts'],
+              message:
+                'mcp-input.ts is server-only (carries unmasked secrets). Import McpClientInput from @/types/mcp instead.',
+            },
+          ],
+        },
+      ],
     },
   },
 ]

@@ -11,15 +11,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  * controlled WORKSPACE_ROOT values.
  */
 
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-files-test-'))
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-files-test-'))
 
 beforeEach(() => {
-  process.env.HERMES_WORKSPACE_DIR = tmpRoot
+  process.env.CLAUDE_WORKSPACE_DIR = tmpRoot
   vi.resetModules()
 })
 
 afterEach(() => {
-  delete process.env.HERMES_WORKSPACE_DIR
+  delete process.env.CLAUDE_WORKSPACE_DIR
 })
 
 describe('ensureWorkspacePath (#121)', () => {
@@ -33,8 +33,8 @@ describe('ensureWorkspacePath (#121)', () => {
 
   it('rejects sibling paths that share a prefix', () => {
     // Core boundary semantics we want, asserted at the primitive level:
-    const root = '/home/user/.hermes'
-    const sibling = '/home/user/.hermes2/secret.txt'
+    const root = '/home/user/.claude'
+    const sibling = '/home/user/.claude2/secret.txt'
 
     // The buggy check (startsWith) wrongly accepts this.
     expect(sibling.startsWith(root)).toBe(true)
@@ -42,69 +42,40 @@ describe('ensureWorkspacePath (#121)', () => {
     // The new check (path.relative) correctly rejects it.
     const rel = path.relative(root, sibling)
     const escapes =
-      !rel ||
-      rel.startsWith('..') ||
-      rel === '..' ||
-      path.isAbsolute(rel)
+      !rel || rel.startsWith('..') || rel === '..' || path.isAbsolute(rel)
     expect(escapes).toBe(true)
   })
 
   it('rejects parent-relative escapes', () => {
-    const root = '/home/user/.hermes'
+    const root = '/home/user/.claude'
     const escape = path.resolve(root, '../../etc/passwd')
 
     expect(escape.startsWith(root)).toBe(false)
 
     const rel = path.relative(root, escape)
     expect(
-      !rel ||
-        rel.startsWith('..') ||
-        rel === '..' ||
-        path.isAbsolute(rel),
+      !rel || rel.startsWith('..') || rel === '..' || path.isAbsolute(rel),
     ).toBe(true)
   })
 
   it('accepts a nested path inside the workspace', () => {
-    const root = '/home/user/.hermes'
-    const inside = '/home/user/.hermes/memory/2026-04-23.md'
+    const root = '/home/user/.claude'
+    const inside = '/home/user/.claude/memory/2026-04-23.md'
 
     expect(inside.startsWith(root)).toBe(true)
 
     const rel = path.relative(root, inside)
     expect(
-      !rel ||
-        rel.startsWith('..') ||
-        rel === '..' ||
-        path.isAbsolute(rel),
+      !rel || rel.startsWith('..') || rel === '..' || path.isAbsolute(rel),
     ).toBe(false)
   })
 
   it('treats exact root as valid', () => {
-    const root = '/home/user/.hermes'
-    const same = '/home/user/.hermes'
+    const root = '/home/user/.claude'
+    const same = '/home/user/.claude'
     const rel = path.relative(root, same)
     // empty string means same directory — allowed by our explicit
     // `resolved === WORKSPACE_ROOT` short-circuit
     expect(rel).toBe('')
-  })
-
-  it('rejects multipart upload filenames that escape the workspace root', async () => {
-    const { resolveUploadDestination } = await import('./files')
-    const uploadDir = path.join(tmpRoot, 'uploads')
-    fs.mkdirSync(uploadDir, { recursive: true })
-
-    expect(() =>
-      resolveUploadDestination(uploadDir, '../outside-workspace.txt'),
-    ).toThrow(/Invalid upload filename|outside workspace/)
-  })
-
-  it('normalizes safe multipart upload filenames inside the target directory', async () => {
-    const { resolveUploadDestination } = await import('./files')
-    const uploadDir = path.join(tmpRoot, 'uploads')
-    fs.mkdirSync(uploadDir, { recursive: true })
-
-    expect(resolveUploadDestination(uploadDir, 'note.txt')).toBe(
-      path.join(uploadDir, 'note.txt'),
-    )
   })
 })

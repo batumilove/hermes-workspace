@@ -24,7 +24,7 @@ interface SessionStore {
 }
 
 const STORE_FILE = join(
-  process.env.HERMES_HOME ?? join(homedir(), '.hermes'),
+  process.env.HERMES_HOME ?? process.env.CLAUDE_HOME ?? join(homedir(), '.hermes'),
   'workspace-sessions.json',
 )
 const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
@@ -138,19 +138,31 @@ export function revokeSessionToken(token: string): void {
 }
 
 /**
+ * Resolve the configured workspace password.
+ *
+ * Honors HERMES_PASSWORD first (current name, post-rename) and falls back to
+ * CLAUDE_PASSWORD for back-compat with deployments configured pre-rename.
+ */
+function getConfiguredPassword(): string {
+  const fromHermes = process.env.HERMES_PASSWORD
+  if (fromHermes && fromHermes.length > 0) return fromHermes
+  const fromClaude = process.env.CLAUDE_PASSWORD
+  if (fromClaude && fromClaude.length > 0) return fromClaude
+  return ''
+}
+
+/**
  * Check if password protection is enabled.
  */
 export function isPasswordProtectionEnabled(): boolean {
-  return Boolean(
-    process.env.HERMES_PASSWORD && process.env.HERMES_PASSWORD.length > 0,
-  )
+  return getConfiguredPassword().length > 0
 }
 
 /**
  * Verify password using timing-safe comparison.
  */
 export function verifyPassword(password: string): boolean {
-  const configured = process.env.HERMES_PASSWORD
+  const configured = getConfiguredPassword()
   if (!configured || configured.length === 0) {
     return false
   }
@@ -181,8 +193,8 @@ export function getSessionTokenFromCookie(
 
   const cookies = cookieHeader.split(';').map((c) => c.trim())
   for (const cookie of cookies) {
-    if (cookie.startsWith('hermes-auth=')) {
-      return cookie.substring('hermes-auth='.length)
+    if (cookie.startsWith('claude-auth=')) {
+      return cookie.substring('claude-auth='.length)
     }
   }
   return null
@@ -214,17 +226,16 @@ export function getRequestIp(request: Request): string {
     if (real) return real
   }
   // Node's Request does not expose the socket; the adapter that constructs it
-  // (TanStack Start / undici) may attach `remoteAddress`. If the peer address is
-  // unavailable, fail closed for local-only sensitive routes instead of assuming
-  // loopback — otherwise remote traffic can be misclassified as local.
+  // (TanStack Start / undici) may attach `remoteAddress` under a well-known
+  // symbol. Fall back to loopback when nothing is available so we fail *safe*
+  // (no LAN/Tailscale bypass for unknown peers).
   const maybeAddress = (request as unknown as { remoteAddress?: string })
     .remoteAddress
-  return (maybeAddress && maybeAddress.trim()) || 'unknown'
+  return (maybeAddress && maybeAddress.trim()) || '127.0.0.1'
 }
 
 function isLocalRequest(request: Request): boolean {
   const ip = getRequestIp(request)
-  if (ip === 'unknown') return false
   const localIPs = ['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1']
   if (localIPs.includes(ip)) return true
   // Allow Tailscale (100.x.x.x) and private LAN ranges
@@ -293,5 +304,5 @@ export function createSessionCookie(token: string): string {
   const attrs = ['HttpOnly']
   if (shouldSetSecureCookie()) attrs.push('Secure')
   attrs.push('SameSite=Strict', 'Path=/', `Max-Age=${30 * 24 * 60 * 60}`)
-  return `hermes-auth=${token}; ${attrs.join('; ')}`
+  return `claude-auth=${token}; ${attrs.join('; ')}`
 }
