@@ -31,8 +31,7 @@ function getSetupSteps(
     {
       title: 'Optional: install Hermes Agent locally',
       command:
-        'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-agent-install.sh
-bash /tmp/hermes-agent-install.sh',
+        'curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-agent-install.sh; bash /tmp/hermes-agent-install.sh',
       note: 'Vanilla hermes-agent unlocks sessions, skills, memory, jobs, and config automatically — no fork required',
     },
     {
